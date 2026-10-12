@@ -116,7 +116,7 @@ final class NavigationModelTests: XCTestCase {
             var settings = model.settings
             settings.useBackgroundAgents = false
             model.updateSettings(settings)
-            let request = NewSessionRequest(projectID: p, folderID: f, name: "x", role: .code, prompt: "", model: nil, permissionMode: .standard)
+            let request = NewSessionRequest(projectID: p, folderID: f, name: "x", prompt: "", model: nil, permissionMode: .standard)
             let a = try XCTUnwrap(model.createSession(request))
             let b = try XCTUnwrap(model.createSession(request))
             model.moveSession(b, before: a)
@@ -260,7 +260,7 @@ final class NavigationModelTests: XCTestCase {
             var settings = model.settings
             settings.useBackgroundAgents = false
             model.updateSettings(settings)
-            let request = NewSessionRequest(projectID: p, folderID: withSession, name: "x", role: .code, prompt: "", model: nil, permissionMode: .standard)
+            let request = NewSessionRequest(projectID: p, folderID: withSession, name: "x", prompt: "", model: nil, permissionMode: .standard)
             _ = try XCTUnwrap(model.createSession(request))
             XCTAssertTrue(model.folderHasContents(withSession))
         }
@@ -326,7 +326,7 @@ final class NavigationModelTests: XCTestCase {
             var settings = model.settings
             settings.useBackgroundAgents = false
             model.updateSettings(settings)
-            let request = NewSessionRequest(projectID: p, folderID: nil, name: "x", role: .code, prompt: "", model: nil, permissionMode: .standard)
+            let request = NewSessionRequest(projectID: p, folderID: nil, name: "x", prompt: "", model: nil, permissionMode: .standard)
             let a = try XCTUnwrap(model.createSession(request))
             let b = try XCTUnwrap(model.createSession(request))
             XCTAssertTrue(model.drop([a.uuidString], on: .group(.folder(f))))
