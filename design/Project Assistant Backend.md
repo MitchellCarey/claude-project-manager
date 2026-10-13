@@ -491,6 +491,15 @@ Follow-up jobs get the notes that session already wrote, and don't repeat them.
      - **The PATH read is tried again** 5 minutes after a failure, and opening a draft reads it, so Edit and Approve after a relaunch check commands too.
      - **Approval order:** `SKILL.md` first, then history, so history never lists a version that wasn't approved. A record that can't be saved, or an edit that can't be saved, says so.
    - **For 5b (decided above, nothing left for later):** drift and Edited Outside Claudio, retirement and Unused Skill, Save to Repository and Restore, REPOSITORY skills in the Skills list, the skill set per session, and skills picked by tags (below).
+   - **Decided at the start of 5b (2026-10-13):**
+     - **An empty set means the shared skills (Tim's call).** A plan-item session gets its own skill set only when at least one skill is chosen. With no chips (you removed them all, or none matched), it uses the project's shared root like a plain New Session, so every approved skill is available. The sheet's hint says which applies.
+     - **Build order:** tags, repository skills and Save to Repository, skill sets, drift, retirement. Sets come before drift and retirement, since Retire and Save to Repository remove a skill's links and drift has to match edits made through a set's link.
+     - **Settled in building, recorded here:**
+       - Keep Change records the edited file as the skill's next version, in its history.
+       - A skill deleted outside Claudio gets a card with Restore and Keep Deletion.
+       - Repository skills Claudio didn't save (your own) are listed and their use counted, but get no drift or Unused cards: there's no approved text to compare with, and retiring one would move your file.
+       - Unused cards show only while the assistant is on. Drift cards show even when it's off, since sessions can edit skills either way.
+       - `Session.skillSet` is decoded tolerantly. An older build that saves `state.json` drops it, and that session then uses the shared root.
    - **Skills picked by tags (Tim, 2026-10-12, for 5b):** design §5 scored chips partly on labels. Since #41, sessions have tags, so a skill can say which tags it's meant for, and the session's tags help pick it.
      - A skill names them in `metadata.claudio-tags` (tag names, matched without regard to case, like `claudio-folders`), read by `SkillFiles`.
      - `SkillChips.pick` scores a skill whose tags include one of the session's, alongside files, folders and use. New Session from Plan picks again when its tags change (unless you've removed chips), as it does for the folder.
@@ -526,6 +535,7 @@ Follow-up jobs get the notes that session already wrote, and don't repeat them.
 | Typing `/name` fires no `PreToolUse`; only `UserPromptSubmit`, with the prompt `/name`. Claude invoking a skill fires `PreToolUse` and `PostToolUse` of the Skill tool with `tool_input.skill` | A recording hook in one stream-json process (Haiku, 2.1.289, step 5). Recorded in `Fixtures/hook-skill-use.log`. |
 | Claude Code's own skill and command names | The init event of signed-out containers, 2.1.169 and 2.1.289 (`Fixtures/init-builtins-*.json`). |
 | A skill draft costs about $0.015 and 5 s on Sonnet; a follow-up with a lesson $0.010 and 3 s, and Sonnet cites the digest's refs | Real calls with the app's prompts and schemas (2.1.289, step 5). Recorded in `Fixtures/assistant-skill-draft.json` and `assistant-followup-lessons.json`. |
+| Removing a skill reaches a running session too: a deleted folder, a removed link, and a folder moved out of the root (as Retire does) were all gone within 12 s, and invoking them gave "Unknown skill". A dangling link is ignored, with no error | One stream-json process (Haiku, 2.1.296, step 5b), two turns. The model's own text still listed them from earlier in the conversation; the loader didn't. |
 | The skill loader follows symlinks, both a linked skill folder and a linked `SKILL.md` | The same probe (2.1.289): both listed in the init event's `skills` and invoked, returning their text. A signed-out 2.1.169 container listed both in its init event too. |
 
 **Assumed, and to check at the build step that needs it:** none.
