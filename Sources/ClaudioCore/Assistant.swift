@@ -379,6 +379,9 @@ public protocol AssistantStoring: AnyObject {
     /// are left out). Made if missing; links not in `skills` are removed.
     func sessionSkillsRoot(projectID: UUID, sessionID: UUID, skills: [String]) throws -> URL?
     func removeSessionSkillsRoot(projectID: UUID, sessionID: UUID) throws
+    /// An approved skill's `SKILL.md` in Claudio's root (nil: none on disk,
+    /// as in memory), for the check for edits made outside Claudio.
+    func approvedSkillFile(name: String, projectID: UUID) -> URL?
 }
 
 /// One approved version of a skill, from its history.
@@ -423,6 +426,7 @@ extension AssistantStoring {
     public func removeApprovedSkill(name: String, projectID: UUID) throws {}
     public func sessionSkillsRoot(projectID: UUID, sessionID: UUID, skills: [String]) throws -> URL? { nil }
     public func removeSessionSkillsRoot(projectID: UUID, sessionID: UUID) throws {}
+    public func approvedSkillFile(name: String, projectID: UUID) -> URL? { nil }
 }
 
 /// Keeps assistant data in memory: the default, so tests and previews never
@@ -668,6 +672,11 @@ public final class AssistantFileStore: AssistantStoring {
             try manager.createSymbolicLink(at: link, withDestinationURL: approved.appendingPathComponent(name))
         }
         return root
+    }
+
+    public func approvedSkillFile(name: String, projectID: UUID) -> URL? {
+        guard SkillName.isValid(name) else { return nil }
+        return directory(projectID: projectID).appendingPathComponent("skills/.claude/skills/\(name)/SKILL.md")
     }
 
     public func removeSessionSkillsRoot(projectID: UUID, sessionID: UUID) throws {

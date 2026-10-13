@@ -347,6 +347,12 @@ public final class AppModel {
     /// as Check Failed, which opens Job Failed. Kept until the note is
     /// checked again (in memory: the Activity Log keeps the record).
     public internal(set) var noteCheckFailures: [UUID: NoteCheckFailure] = [:]
+    /// Each watched skill file's size and date as last read, so the drift
+    /// check reads a file only when it has changed (see AppModel+SkillDrift).
+    @ObservationIgnored var skillFileStamps: [String: String] = [:]
+    /// The session whose Edit or Write last touched each skill file (by
+    /// resolved path), from the hooks, to name it on the card (not saved).
+    @ObservationIgnored var skillFileEditors: [String: UUID] = [:]
     /// Lessons a skill is being drafted from now (see AppModel+SkillDrafts).
     public internal(set) var draftingCandidates = Set<UUID>()
     /// The login shell's PATH, read once for the drafts' command check
@@ -2067,6 +2073,7 @@ public final class AppModel {
             // It's carrying on, so an offered follow-up no longer applies.
             if event.name == .userPromptSubmit { withdrawFollowUpOffer(forSession: target) }
             if event.name == .preToolUse || event.name == .userPromptSubmit { noteSkillUse(event, sessionID: target) }
+            if event.name == .postToolUse { noteSkillFileEdit(event, sessionID: target) }
             // Otherwise the only trace is the follow-up it holds back.
             if event.name == .stopFailure {
                 log.append(.error, "\(state.workspace.session(target)?.name ?? "A session"): its turn failed (\(event.error ?? "an API error"))")

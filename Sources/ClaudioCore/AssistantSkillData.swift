@@ -126,6 +126,35 @@ public struct SkillRecord: Codable, Equatable, Sendable {
     }
 }
 
+/// An approved skill's file changed, or went, without Claudio (step 5b):
+/// a session edited it through `--add-dir`, or someone edited the
+/// repository's copy. Needs You asks: Keep Change or Revert (Restore or
+/// Keep Deletion for one that's gone).
+public struct OutsideEdit: Codable, Equatable, Identifiable, Sendable {
+    public var id = UUID()
+    public var name: String
+    public var location: SkillLocation
+    /// The file is gone.
+    public var deleted: Bool
+    /// `SkillText.hash` of the file as found (nil when it's gone).
+    public var foundHash: String?
+    public var foundAt: Date
+    /// The session whose Edit or Write changed it, when the hooks showed one.
+    public var editorSessionID: UUID?
+    public var editorName: String?
+
+    public init(name: String, location: SkillLocation, deleted: Bool, foundHash: String?, foundAt: Date,
+                editorSessionID: UUID? = nil, editorName: String? = nil) {
+        self.name = name
+        self.location = location
+        self.deleted = deleted
+        self.foundHash = foundHash
+        self.foundAt = foundAt
+        self.editorSessionID = editorSessionID
+        self.editorName = editorName
+    }
+}
+
 /// What a project's `skills.json` holds.
 public struct SkillsData: Codable, Equatable, Sendable {
     /// 1: usage, candidates, proposals and records. 2 (step 5b): a record's
@@ -140,6 +169,8 @@ public struct SkillsData: Codable, Equatable, Sendable {
     public var candidates: [LessonCandidate] = []
     public var proposals: [SkillProposal] = []
     public var records: [SkillRecord] = []
+    /// Approved skills changed or removed outside Claudio, waiting for you.
+    public var outsideEdits: [OutsideEdit] = []
     /// Entries that couldn't be read, kept as they were.
     public var unreadableEntries: [String: [JSONValue]] = [:]
 
@@ -147,7 +178,7 @@ public struct SkillsData: Codable, Equatable, Sendable {
         self.usage = usage
     }
 
-    private enum CodingKeys: String, CodingKey { case version, usage, candidates, proposals, records }
+    private enum CodingKeys: String, CodingKey { case version, usage, candidates, proposals, records, outsideEdits }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -164,6 +195,7 @@ public struct SkillsData: Codable, Equatable, Sendable {
         candidates = each(LessonCandidate.self, .candidates)
         proposals = each(SkillProposal.self, .proposals)
         records = each(SkillRecord.self, .records)
+        outsideEdits = each(OutsideEdit.self, .outsideEdits)
         let raw = ((try? c.decodeIfPresent([String: JSONValue].self, forKey: .usage)) ?? nil) ?? [:]
         let encoder = JSONEncoder()
         for (name, value) in raw {
@@ -192,11 +224,12 @@ public struct SkillsData: Codable, Equatable, Sendable {
         try each(candidates, .candidates)
         try each(proposals, .proposals)
         try each(records, .records)
+        try each(outsideEdits, .outsideEdits)
     }
 
     public var isEmpty: Bool {
         usage.isEmpty && unreadableUsage.isEmpty && candidates.isEmpty && proposals.isEmpty && records.isEmpty
-            && unreadableEntries.isEmpty
+            && outsideEdits.isEmpty && unreadableEntries.isEmpty
     }
 
     /// Candidates marked as having a draft waiting whose draft has gone

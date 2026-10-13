@@ -373,6 +373,7 @@ extension AppModel {
             report("Couldn't save the skill \(proposal.name): \(AppModel.describe(error))")
             return false
         }
+        forgetSkillFileStamps(proposal.name, projectID: projectID)
         // After the skill itself, so history never lists a version that
         // wasn't approved; a failure here loses only the earlier-versions list.
         do {
@@ -507,6 +508,7 @@ extension AppModel {
             return false
         }
         let hash = SkillText.hash(skill.text)
+        forgetSkillFileStamps(name, projectID: projectID)
         updateSkillsData(projectID) { data in
             if let index = data.records.firstIndex(where: { $0.name == name }) {
                 data.records[index].location = .repository

@@ -484,4 +484,95 @@ struct SkillLocationTag: View {
         }
     }
 }
+
+/// Needs You: a skill changed or deleted outside Claudio.
+struct OutsideEditRow: View {
+    @Environment(AppModel.self) private var model
+    let edit: OutsideEdit
+    let projectID: UUID
+    @State private var hovering = false
+
+    var body: some View {
+        Button { model.openOutsideEdit(edit.id, projectID: projectID) } label: {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: "exclamationmark.triangle").font(.system(size: 12)).foregroundStyle(DS.orange).padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(edit.name) \(edit.deleted ? "was deleted" : "was changed") outside Claudio")
+                        .font(DS.font(13)).foregroundStyle(DS.text).lineLimit(2)
+                    Text(model.outsideEditLine(edit)).font(DS.font(11.5)).foregroundStyle(DS.dim).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(DS.dim).padding(.top, 3)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 5).fill(hovering ? DS.border : DS.input))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(DS.orange.opacity(0.6), lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Skill Change: EDITED OUTSIDE CLAUDIO, who changed which file and when,
+/// the diff from the approved text, and Keep Change or Revert (Restore or
+/// Keep Deletion for one that's gone).
+struct OutsideEditView: View {
+    @Environment(AppModel.self) private var model
+    let edit: OutsideEdit
+    let projectID: UUID
+    /// Read once the view opens, not on every redraw.
+    @State private var approved: String?
+    @State private var current: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    SkillTag(text: edit.deleted ? "DELETED OUTSIDE CLAUDIO" : "EDITED OUTSIDE CLAUDIO", color: DS.orange)
+                    Text(edit.name).font(DS.font(14, .bold)).foregroundStyle(DS.text).lineLimit(1)
+                }
+                Text(model.outsideEditLine(edit)).font(DS.font(12.5)).foregroundStyle(DS.muted).fixedSize(horizontal: false, vertical: true)
+                if !edit.deleted {
+                    SkillDiffLines(old: approved, new: current ?? "")
+                } else if let approved {
+                    SkillDiffLines(old: approved, new: "")
+                }
+                if approved == nil {
+                    Text("Claudio doesn't have the approved text, so it can't be put back.")
+                        .font(DS.font(11.5)).foregroundStyle(DS.dim)
+                }
+                HStack(spacing: 8) {
+                    if edit.deleted {
+                        Button("Restore") { if model.revertOutsideEdit(edit.id, projectID: projectID) { model.closePlanItem() } }
+                            .buttonStyle(PrimaryButtonStyle(fontSize: 12, horizontalPadding: 12, verticalPadding: 4))
+                            .disabled(approved == nil)
+                        Button("Keep Deletion") {
+                            model.keepOutsideDeletion(edit.id, projectID: projectID)
+                            model.closePlanItem()
+                        }
+                        .buttonStyle(OutlineButtonStyle())
+                    } else {
+                        Button("Keep Change") { if model.keepOutsideEdit(edit.id, projectID: projectID) { model.closePlanItem() } }
+                            .buttonStyle(PrimaryButtonStyle(fontSize: 12, horizontalPadding: 12, verticalPadding: 4))
+                            .help("The file as it is becomes the skill's next version.")
+                        Button("Revert") { if model.revertOutsideEdit(edit.id, projectID: projectID) { model.closePlanItem() } }
+                            .buttonStyle(OutlineButtonStyle())
+                            .disabled(approved == nil)
+                            .help("Put back the approved version, rewriting the file.")
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 2)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .task(id: edit.id) {
+            approved = model.approvedText(of: edit.name, inProject: projectID)
+            current = model.currentText(of: edit, inProject: projectID)
+        }
+    }
+}
 #endif

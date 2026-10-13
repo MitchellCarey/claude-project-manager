@@ -1259,4 +1259,194 @@ final class SkillTests: XCTestCase {
         let odd = try JSONSerialization.data(withJSONObject: object)
         XCTAssertNil(try JSONFileStore.decoder.decode(Session.self, from: odd).skillSet, "unreadable: the shared skills")
     }
+
+    // MARK: - Step 5b: drift (edited outside Claudio)
+
+    struct DiskFixture {
+        let model: AppModel
+        let store: AssistantFileStore
+        let project: UUID
+        let session: UUID
+        let repo: URL
+        let hookLog: URL
+    }
+
+    /// A model on the real file store, with a real repository folder.
+    func makeDiskFixture() async throws -> DiskFixture {
+        let support = try makeTemporaryDirectory()
+        let repo = try makeTemporaryDirectory()
+        let store = AssistantFileStore(root: support.appendingPathComponent("assistant"))
+        var state = PersistedState()
+        let project = state.workspace.addProject(path: repo.path)
+        let session = Session(projectID: project, claudeSessionID: SkillTests.conversation, hasConversation: true, name: "Update PR",
+                              workingDirectory: repo.path, status: .completed)
+        try state.workspace.addSession(session)
+        let memory = MemoryStore()
+        memory.state = state
+        let hookLog = support.appendingPathComponent("h.log")
+        let runner = SkillRunner()
+        let model = await MainActor.run {
+            AppModel(store: memory, discovery: SessionDiscovery(claudeHome: support), hookEventsURL: hookLog, runner: runner,
+                     assistantStore: store, locateClaude: { _ in "/usr/local/bin/claude" }, locateGitHubCLI: { nil },
+                     shell: "/bin/sh", now: { SkillTests.now }, home: "/")
+        }
+        return DiskFixture(model: model, store: store, project: project, session: session.id, repo: repo, hookLog: hookLog)
+    }
+
+    /// Approves `linux-tests` through Needs You, as the app does.
+    @MainActor func approveOnDisk(_ d: DiskFixture, body: String = "Run it in Docker.") -> URL {
+        let proposal = SkillProposal(candidateID: nil, name: "linux-tests", text: SkillTests.skillText(body), previousText: nil,
+                                     why: "w", createdAt: SkillTests.now, model: "Sonnet")
+        d.model.updateSkillsData(d.project) { $0.proposals.append(proposal) }
+        d.model.commandExistsOverride = { _ in true }
+        XCTAssertTrue(d.model.approveSkillProposal(proposal.id, projectID: d.project))
+        return d.store.approvedSkillFile(name: "linux-tests", projectID: d.project)!
+    }
+
+    func testClaudiosOwnWritesArentOutsideEdits() async throws {
+        let d = try await makeDiskFixture()
+        await MainActor.run {
+            _ = approveOnDisk(d)
+            d.model.checkSkillDrift()
+            XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty, "approving isn't an outside edit")
+        }
+    }
+
+    func testAnEditOutsideClaudioIsFoundAndKept() async throws {
+        let d = try await makeDiskFixture()
+        let file = await MainActor.run { () -> URL in
+            let file = approveOnDisk(d)
+            d.model.checkSkillDrift()
+            return file
+        }
+        let edited = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "Run it in Docker.", with: "Run it anywhere.")
+        try edited.write(to: file, atomically: true, encoding: .utf8)
+        try await MainActor.run {
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first)
+            XCTAssertFalse(edit.deleted)
+            XCTAssertEqual(d.model.outsideEditLine(edit), "linux-tests/SKILL.md in Claudio's skills was changed just now")
+            XCTAssertEqual(SkillText.body(of: d.model.approvedText(of: "linux-tests", inProject: d.project) ?? ""), "Run it in Docker.")
+            XCTAssertEqual(d.model.needsYouCount(inProject: d.project), 1)
+            d.model.checkSkillDrift()
+            XCTAssertEqual(d.model.outsideEdits(inProject: d.project).count, 1, "not asked twice")
+            XCTAssertTrue(d.model.keepOutsideEdit(edit.id, projectID: d.project))
+            let record = try XCTUnwrap(d.model.skillsData(inProject: d.project).records.first)
+            XCTAssertEqual(record.version, 2, "the change is its next version")
+            XCTAssertEqual(record.contentHash, SkillText.hash(edited))
+            XCTAssertEqual(d.store.skillHistory(name: "linux-tests", projectID: d.project).map(\.version), [2, 1])
+            d.model.checkSkillDrift()
+            XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty)
+        }
+    }
+
+    func testRevertPutsTheApprovedTextBack() async throws {
+        let d = try await makeDiskFixture()
+        let (file, approved) = await MainActor.run { () -> (URL, String) in
+            let file = approveOnDisk(d)
+            d.model.checkSkillDrift()
+            return (file, try! String(contentsOf: file, encoding: .utf8))
+        }
+        try "---\nname: linux-tests\ndescription: Hijacked.\n---\nDo something else.\n".write(to: file, atomically: true, encoding: .utf8)
+        try await MainActor.run {
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first)
+            XCTAssertTrue(d.model.revertOutsideEdit(edit.id, projectID: d.project))
+            XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), approved)
+            d.model.checkSkillDrift()
+            XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty, "Claudio's own write isn't an outside edit")
+        }
+    }
+
+    func testTheEditingSessionIsNamedEvenThroughItsOwnSet() async throws {
+        let d = try await makeDiskFixture()
+        let file = await MainActor.run { () -> URL in
+            let file = approveOnDisk(d)
+            d.model.setSessionSkillSet(d.session, ["linux-tests"])
+            _ = d.model.skillSetRoot(of: d.model.workspace.session(d.session)!)
+            d.model.checkSkillDrift()
+            return file
+        }
+        let own = d.store.directory(projectID: d.project)
+            .appendingPathComponent("sessions/\(d.session.uuidString.lowercased())/.claude/skills/linux-tests/SKILL.md")
+        let line = d.session.uuidString + "\t" + History.json(["hook_event_name": "PostToolUse", "session_id": SkillTests.conversation,
+                                                                "tool_name": "Edit", "tool_input": ["file_path": own.path]]) + "\n"
+        try line.write(to: d.hookLog, atomically: true, encoding: .utf8)
+        try "---\nname: linux-tests\ndescription: d\n---\nEdited by the session.\n".write(to: own, atomically: true, encoding: .utf8)
+        try await MainActor.run {
+            d.model.pollHookEvents()
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first, "edited through the link: the same file")
+            XCTAssertEqual(edit.editorName, "Update PR")
+            XCTAssertEqual(d.model.outsideEditLine(edit), "The Update PR session changed linux-tests/SKILL.md in Claudio's skills just now")
+            XCTAssertTrue(try String(contentsOf: file, encoding: .utf8).contains("Edited by the session."))
+        }
+    }
+
+    func testADeletedSkillCanBeRestoredOrLetGo() async throws {
+        let d = try await makeDiskFixture()
+        let file = await MainActor.run { () -> URL in
+            let file = approveOnDisk(d)
+            d.model.setSessionSkillSet(d.session, ["linux-tests"])
+            d.model.checkSkillDrift()
+            return file
+        }
+        try FileManager.default.removeItem(at: file.deletingLastPathComponent())
+        try await MainActor.run {
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first)
+            XCTAssertTrue(edit.deleted)
+            XCTAssertTrue(d.model.revertOutsideEdit(edit.id, projectID: d.project), "Restore")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+        }
+        try FileManager.default.removeItem(at: file.deletingLastPathComponent())
+        try await MainActor.run {
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first)
+            d.model.keepOutsideDeletion(edit.id, projectID: d.project)
+            XCTAssertTrue(d.model.skillsData(inProject: d.project).records.isEmpty, "Claudio forgets it")
+            XCTAssertEqual(d.model.workspace.session(d.session)?.skillSet, [], "and sets lose it")
+            d.model.checkSkillDrift()
+            XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty)
+        }
+    }
+
+    func testARepositorySkillClaudioSavedIsWatchedAndShownWithTheAssistantOff() async throws {
+        let d = try await makeDiskFixture()
+        let file = await MainActor.run { () -> URL in
+            _ = approveOnDisk(d)
+            XCTAssertTrue(d.model.saveSkillToRepository("linux-tests", projectID: d.project))
+            d.model.checkSkillDrift()
+            XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty, "saving it isn't an outside edit")
+            d.model.setAssistantMode(.off, projectID: d.project)
+            return d.repo.appendingPathComponent(".claude/skills/linux-tests/SKILL.md")
+        }
+        let approved = try String(contentsOf: file, encoding: .utf8)
+        try (approved + "\nOne more line.\n").write(to: file, atomically: true, encoding: .utf8)
+        try await MainActor.run {
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first)
+            XCTAssertEqual(edit.location, .repository)
+            XCTAssertEqual(d.model.outsideEditLine(edit), ".claude/skills/linux-tests/SKILL.md was changed just now")
+            XCTAssertEqual(d.model.needsYouCount(inProject: d.project), 1, "shown with the assistant off: sessions can edit either way")
+            XCTAssertTrue(d.model.revertOutsideEdit(edit.id, projectID: d.project))
+            XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), approved, "the repository's copy is put back")
+        }
+    }
+
+    func testAnEditPutBackByHandClearsTheCard() async throws {
+        let d = try await makeDiskFixture()
+        let (file, approved) = await MainActor.run { () -> (URL, String) in
+            let file = approveOnDisk(d)
+            d.model.checkSkillDrift()
+            return (file, try! String(contentsOf: file, encoding: .utf8))
+        }
+        try (approved + "x").write(to: file, atomically: true, encoding: .utf8)
+        await MainActor.run { d.model.checkSkillDrift() }
+        try approved.write(to: file, atomically: true, encoding: .utf8)
+        await MainActor.run {
+            d.model.checkSkillDrift()
+            XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty)
+        }
+    }
 }

@@ -27,6 +27,8 @@ public enum AssistantPanelView: Equatable, Sendable {
     case skill(projectID: UUID, name: String)
     /// New Skill or Changed Skill, from Needs You.
     case skillProposal(projectID: UUID, id: UUID)
+    /// A skill edited (or deleted) outside Claudio, from Needs You.
+    case outsideEdit(projectID: UUID, id: UUID)
 }
 
 /// What the assistant suggests for a note, shown on it until you answer.
@@ -205,6 +207,10 @@ extension AppModel {
         assistantPanel = .skill(projectID: projectID, name: name)
     }
 
+    public func openOutsideEdit(_ id: UUID, projectID: UUID) {
+        assistantPanel = .outsideEdit(projectID: projectID, id: id)
+    }
+
     public func openSkillProposal(_ id: UUID, projectID: UUID) {
         refreshApprovedSkills(projectID: projectID)
         assistantPanel = .skillProposal(projectID: projectID, id: id)
@@ -223,6 +229,8 @@ extension AppModel {
             return projectID == assistantProjectID ? assistantPanel : nil
         case .skillProposal(let projectID, let id):
             return projectID == assistantProjectID && skillProposal(id, inProject: projectID) != nil ? assistantPanel : nil
+        case .outsideEdit(let projectID, let id):
+            return projectID == assistantProjectID && outsideEdit(id, inProject: projectID) != nil ? assistantPanel : nil
         default:
             return nil
         }
