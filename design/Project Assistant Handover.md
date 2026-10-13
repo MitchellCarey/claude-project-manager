@@ -14,7 +14,7 @@ Builds on the shipped two-rail layout: `ToolRails.swift`, `ToolWindows.swift`, `
 1. **Header:**
    - the title: ASSISTANT, or the view name when drilled in, with a ‹ back button
    - New Note (⌘⇧N)
-   - a ⋯ menu holding Import Issues…, Skills (with a count), Activity Log and Assistant Settings… *(4b: Activity Log and Assistant Settings… only; Import Issues… and Skills join it with the steps that build them.)*
+   - a ⋯ menu holding Import Issues…, Skills (with a count), Activity Log and Assistant Settings… *(4b: Activity Log and Assistant Settings… only; Import Issues… and Skills join it with the steps that build them. 5a: Skills (n) joins it.)*
 2. **Status line** (only one shows at a time):
    - **Off:** a card reading "The assistant is off for this project…" or "…turned off in Settings…", with Turn On.
    - **Paused** (Automatic mode, over the usage threshold): "Background work paused · 5-hour usage 84% · 2 waiting", in quiet muted text, with a Limits… link. The count is the number of held-back jobs. *(4b: the reason can also be "Using credits", "Waiting for a usage reading" or "Daily limit of 20 reached"; "· n waiting" is left out when nothing waits.)*
@@ -25,6 +25,7 @@ Builds on the shipped two-rail layout: `ToolRails.swift`, `ToolWindows.swift`, `
    - in progress: spinner, dashed border, "Usually a few seconds, up to about 30.", not clickable
    - failed: red icon and border, which opens the Job Failed view *(4a: it opens the follow-up's own view, with the message, Try Again and Close. The Job Failed view comes with 4b's Activity Log.)*
    - *(Added in 4a: a session's `claudio suggest` shows as a card with the session's name, its text, and Add to Plan, Add as Idea and Dismiss.)*
+   - *(Added in 5a: "Drafting a skill…" while a draft is written, in progress like a follow-up; in Manual mode, a lesson offered for drafting, "Came up in n sessions. Draft a skill from it?" with **Draft Skill** and **Not Now**; and "New skill: <name>" or "Changed skill: <name>" with the reason, which opens its view.)*
 5. **Plan | Notes switch:** each side shows its count.
    - Plan is grouped as IN SESSION, PLANNED, IDEAS and DONE. Each row shows a status dot, the title and a meta line (issue · n notes · session).
    - Notes: see "Note authorship".
@@ -40,6 +41,7 @@ Notes are listed newest first, with a legend at the top (You, Assistant, A sessi
 | A session | `console-line`, teal `#00bc8c` | "Shell Follow Up · 2m" (the session name is the author) | Yes |
 
 - Each note links to its plan item with a chip, if it has one.
+- *(Added in 5a: a note whose background check failed shows "Check against the plan failed" in red, which opens Job Failed with Try Again.)*
 - Notes without an item show a **Promote…** link, which you start yourself. *(Renamed in the build: **Check Against Plan…** while the assistant is on, since it asks Claude and changes nothing until you answer; **Add as Idea** while it's off. "Promote…" read as though it would create the item.)*
 
 ## Promote suggestions
@@ -67,11 +69,14 @@ What happens in other modes:
   - **Why**
   - skill text as added lines
   - Approve, Edit and Not Now
+  - *(Added in testing: CHECK BEFORE APPROVING, in amber above the text, lists files the skill names that aren't in the repository and commands it runs that aren't installed. The Needs You card says "n to check before approving".)*
+  - *(Built in 5a: Edit opens the text, which is checked again on Save and can't rename the skill. Not Now drops the draft; its lesson is drafted again once two more sessions show it. The view ends with "Drafted by <model> · <time>".)*
 - **Changed Skill:**
   - CHANGED SKILL pill and "The current version stays in use until you approve"
   - **Why**
   - a diff with removed lines (red tint, −, struck through) and added lines (teal tint, +)
   - Approve, Edit (edits the new version) and Not Now
+  - *(Built in 5a: the diff shows the whole file, removed and added lines in place. Approve refuses, with a toast, when the skill was edited after the draft was made.)*
 - **Skill Change** (edited outside Claudio):
   - EDITED OUTSIDE CLAUDIO pill (amber)
   - who changed which file and when, for example "The Update PR session changed .claude/skills/readme-style/SKILL.md 10h ago"
@@ -92,12 +97,14 @@ What happens in other modes:
   - every skill, with a location tag: **CLAUDIO** (the default, grey) or **REPOSITORY** (blue tint)
   - how many sessions used it and when it last changed
   - retired skills are greyed out
+  - *(5a: Claudio's skills, each with "Used by n sessions · changed <age> ago"; REPOSITORY skills and retired ones come with 5b.)*
 - **Skill** (from Skills):
   - location tag
   - the skill text
   - For a Claudio skill: **Save to Repository**, with an inline confirmation: "Claudio copies this skill to `.claude/skills/<slug>/SKILL.md` in <project>. Commit it to share it with anyone who clones the repository. From then on Claudio uses the repository copy." Cancel or Save to Repository.
   - For a repository skill: its path, and "Edits made there show up in Needs You for review."
   - For a retired skill: Restore.
+  - *(5a: the text and its version; with more than one approved version, VERSIONS lists them and shows each one's text. Save to Repository and Restore come with 5b.)*
 - **Assistant Settings** (⋯, per project):
   - **MODE:** radio cards.
     - Automatic (Default): also works in the background (follow-ups when a session finishes, skill proposals and new GitHub issues). It only calls Claude when something new needs judgement. *(4a: follow-ups are offered in Automatic mode, and run when you accept.)*
@@ -133,6 +140,7 @@ What happens in other modes:
   - **Working:** a spinner, "Reviewing <session>…", "This can take up to about 30 seconds. You can keep working." (plus the usage note while usage is high, when you started it yourself).
   - **Ready:** checkbox rows. NOTE rows are already saved; unticking one removes it. PLAN rows are applied with **Add n to Plan**.
     - If there's nothing to keep: "Nothing new to keep from this session." and Close.
+    - *(5a: lessons it kept for skills are listed under LESSONS · FOR SKILLS, with a line on when a skill is drafted, and its Needs You card says "1 lesson for skills". Tim's testing showed "Nothing new to keep" for a follow-up that had kept a lesson.)*
     - *(4a: with notes but no plan changes, the button is Done, which closes it. Opened from Needs You, it shows the same rows under a "Follow-up" title, with Close in place of Later.)*
   - Later (or ✕) keeps it in Needs You as "<session> finished".
   - In **Automatic** mode it appears when a session finishes. If paused by usage, it waits and appears once usage drops (the Activity Log shows Waiting until then).
