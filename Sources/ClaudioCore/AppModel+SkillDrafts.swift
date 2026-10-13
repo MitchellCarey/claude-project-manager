@@ -460,12 +460,14 @@ extension AppModel {
         }
         return (approvedSkills[projectID] ?? []).map { row($0, .claudio) }
             + (repositorySkills[projectID] ?? []).map { row($0, .repository) }
+            + (retiredSkills[projectID] ?? []).map { row($0, .retired) }
     }
 
     /// A skill by name: Claudio's, else the repository's.
     public func skill(named name: String, inProject projectID: UUID) -> (skill: ApprovedSkill, location: SkillLocation)? {
         if let skill = (approvedSkills[projectID] ?? []).first(where: { $0.name == name }) { return (skill, .claudio) }
         if let skill = (repositorySkills[projectID] ?? []).first(where: { $0.name == name }) { return (skill, .repository) }
+        if let skill = (retiredSkills[projectID] ?? []).first(where: { $0.name == name }) { return (skill, .retired) }
         return nil
     }
 

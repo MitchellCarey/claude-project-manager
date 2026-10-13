@@ -330,6 +330,10 @@ public final class AppModel {
     public internal(set) var toast: Toast?
     /// Each project's approved skills, as last read (see AppModel+AssistantSessions).
     public internal(set) var approvedSkills: [UUID: [ApprovedSkill]] = [:]
+    /// Each project's retired skills (step 5b), greyed out in Skills.
+    public internal(set) var retiredSkills: [UUID: [ApprovedSkill]] = [:]
+    /// The day the unused-skills check last ran ("2026-10-14"): once a day.
+    @ObservationIgnored var unusedSkillCheckDay: String?
     /// Each project's own skills, in `<repo>/.claude/skills` (step 5b).
     public internal(set) var repositorySkills: [UUID: [ApprovedSkill]] = [:]
     /// Each project's `skills.json` (see AppModel+Skills).

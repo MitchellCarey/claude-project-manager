@@ -27,7 +27,8 @@ struct NeedsYouSection: View {
                     .padding(.horizontal, 4)
                 let skills = model.skillsData(inProject: projectID)
                 let hasSkillCards = model.isAssistantOn(inProject: projectID)
-                    && (!skills.proposals.isEmpty || skills.candidates.contains { $0.state == .offered || model.draftingCandidates.contains($0.id) })
+                    && (!skills.proposals.isEmpty || !skills.unusedSkills.isEmpty
+                        || skills.candidates.contains { $0.state == .offered || model.draftingCandidates.contains($0.id) })
                 let outsideEdits = model.outsideEdits(inProject: projectID)
                 if data.followUps.isEmpty && data.suggestions.isEmpty && longRunning.isEmpty && !hasSkillCards && outsideEdits.isEmpty {
                     Text("Nothing needs you.")

@@ -1449,4 +1449,105 @@ final class SkillTests: XCTestCase {
             XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty)
         }
     }
+
+    // MARK: - Step 5b: retirement
+
+    final class Clock: @unchecked Sendable {
+        var date = SkillTests.now
+    }
+
+    func testASkillUnusedFor30DaysIsOfferedForRetiring() async throws {
+        let clock = Clock()
+        let f = try await makeFixture(clock: { clock.date })
+        try await MainActor.run {
+            let proposal = propose(f, text: SkillTests.skillText("Run it."))
+            XCTAssertTrue(f.model.approveSkillProposal(proposal.id, projectID: f.project))
+            f.model.checkUnusedSkills()
+            XCTAssertTrue(f.model.unusedSkills(inProject: f.project).isEmpty, "approving counts as a use")
+            clock.date = SkillTests.now.addingTimeInterval(29 * 86_400)
+            f.model.checkUnusedSkills()
+            XCTAssertTrue(f.model.unusedSkills(inProject: f.project).isEmpty, "29 days")
+            clock.date = SkillTests.now.addingTimeInterval(31 * 86_400)
+            f.model.checkUnusedSkills()
+            let unused = try XCTUnwrap(f.model.unusedSkills(inProject: f.project).first)
+            XCTAssertEqual(unused.name, "linux-tests")
+            XCTAssertEqual(unused.lastUsed, SkillTests.now)
+            XCTAssertEqual(f.model.needsYouCount(inProject: f.project), 1)
+            f.model.checkUnusedSkills()
+            XCTAssertEqual(f.model.unusedSkills(inProject: f.project).count, 1, "once a day, and not twice")
+            f.model.keepUnusedSkill(unused.id, projectID: f.project)
+            XCTAssertTrue(f.model.unusedSkills(inProject: f.project).isEmpty)
+            XCTAssertEqual(f.model.skillsData(inProject: f.project).usage["linux-tests"]?.lastUsed, clock.date, "Keep counts as a use")
+        }
+    }
+
+    func testNoUnusedCardsWithTheAssistantOffOrForRepositorySkills() async throws {
+        let (f, repo) = try await makeRepositoryFixture()
+        try writeRepositorySkill(repo, "theirs", "---\nname: theirs\ndescription: d\n---\nBody\n")
+        await MainActor.run {
+            let proposal = propose(f, text: SkillTests.skillText("Run it."))
+            XCTAssertTrue(f.model.approveSkillProposal(proposal.id, projectID: f.project))
+            // Old enough: approved 40 days before the fixture's clock.
+            f.model.updateSkillsData(f.project) { data in
+                data.usage["linux-tests"]?.lastUsed = SkillTests.now.addingTimeInterval(-40 * 86_400)
+                data.records[0].approvedAt = SkillTests.now.addingTimeInterval(-40 * 86_400)
+            }
+            f.model.setAssistantMode(.off, projectID: f.project)
+            f.model.checkUnusedSkills()
+            XCTAssertTrue(f.model.unusedSkills(inProject: f.project).isEmpty, "only while the assistant is on")
+            f.model.unusedSkillCheckDay = nil
+            f.model.setAssistantMode(.automatic, projectID: f.project)
+            f.model.checkUnusedSkills()
+            XCTAssertEqual(f.model.unusedSkills(inProject: f.project).map(\.name), ["linux-tests"], "the repository's own never")
+        }
+    }
+
+    func testAHandPlacedSkillGetsAStartNotACard() async throws {
+        let f = try await makeFixture()
+        await MainActor.run {
+            approve(f, ["by-hand"])
+            f.model.checkUnusedSkills()
+            XCTAssertTrue(f.model.unusedSkills(inProject: f.project).isEmpty)
+            XCTAssertEqual(f.model.skillsData(inProject: f.project).usage["by-hand"]?.lastUsed, SkillTests.now,
+                           "no use or approval known: today is its start")
+        }
+    }
+
+    func testRetireMovesTheSkillOutAndRestoreBringsItBack() async throws {
+        let d = try await makeDiskFixture()
+        try await MainActor.run {
+            let file = approveOnDisk(d)
+            d.model.setSessionSkillSet(d.session, ["linux-tests"])
+            XCTAssertTrue(d.model.retireSkill("linux-tests", projectID: d.project))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: file.path), "out of the --add-dir root")
+            let retired = d.store.directory(projectID: d.project).appendingPathComponent("retired/linux-tests/SKILL.md")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: retired.path))
+            XCTAssertEqual(d.model.skillsData(inProject: d.project).records.first?.location, .retired)
+            XCTAssertEqual(d.model.workspace.session(d.session)?.skillSet, [], "out of every set")
+            XCTAssertEqual(d.model.skillRows(inProject: d.project).map(\.location), [.retired], "greyed out in Skills")
+            d.model.checkSkillDrift()
+            XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty, "retiring isn't an outside deletion")
+            XCTAssertTrue(d.model.restoreSkill("linux-tests", projectID: d.project))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+            XCTAssertEqual(d.model.skillsData(inProject: d.project).records.first?.location, .claudio)
+            XCTAssertEqual(d.model.skillRows(inProject: d.project).map(\.location), [.claudio])
+            d.model.checkSkillDrift()
+            XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty)
+        }
+    }
+
+    func testRetireFromTheCard() async throws {
+        let f = try await makeFixture()
+        try await MainActor.run {
+            let proposal = propose(f, text: SkillTests.skillText("Run it."))
+            XCTAssertTrue(f.model.approveSkillProposal(proposal.id, projectID: f.project))
+            f.model.updateSkillsData(f.project) { $0.usage["linux-tests"]?.lastUsed = SkillTests.now.addingTimeInterval(-31 * 86_400) }
+            f.model.findUnusedSkills(projectID: f.project)
+            let unused = try XCTUnwrap(f.model.unusedSkills(inProject: f.project).first)
+            XCTAssertTrue(f.model.retireUnusedSkill(unused.id, projectID: f.project))
+            XCTAssertTrue(f.model.unusedSkills(inProject: f.project).isEmpty)
+            XCTAssertEqual(f.assistant.retired[f.project]?.map(\.name), ["linux-tests"])
+            XCTAssertEqual(f.model.toast?.text, "Retired linux-tests. Restore it from Skills.")
+        }
+    }
 }

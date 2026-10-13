@@ -155,6 +155,22 @@ public struct OutsideEdit: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// An approved skill no session has used for `AppModel.unusedSkillDays`
+/// (step 5b): Needs You asks Retire or Keep.
+public struct UnusedSkill: Codable, Equatable, Identifiable, Sendable {
+    public var id = UUID()
+    public var name: String
+    /// Its last use (approving counts), as of the check.
+    public var lastUsed: Date
+    public var foundAt: Date
+
+    public init(name: String, lastUsed: Date, foundAt: Date) {
+        self.name = name
+        self.lastUsed = lastUsed
+        self.foundAt = foundAt
+    }
+}
+
 /// What a project's `skills.json` holds.
 public struct SkillsData: Codable, Equatable, Sendable {
     /// 1: usage, candidates, proposals and records. 2 (step 5b): a record's
@@ -171,6 +187,8 @@ public struct SkillsData: Codable, Equatable, Sendable {
     public var records: [SkillRecord] = []
     /// Approved skills changed or removed outside Claudio, waiting for you.
     public var outsideEdits: [OutsideEdit] = []
+    /// Approved skills unused for 30 days, waiting for you.
+    public var unusedSkills: [UnusedSkill] = []
     /// Entries that couldn't be read, kept as they were.
     public var unreadableEntries: [String: [JSONValue]] = [:]
 
@@ -178,7 +196,7 @@ public struct SkillsData: Codable, Equatable, Sendable {
         self.usage = usage
     }
 
-    private enum CodingKeys: String, CodingKey { case version, usage, candidates, proposals, records, outsideEdits }
+    private enum CodingKeys: String, CodingKey { case version, usage, candidates, proposals, records, outsideEdits, unusedSkills }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -196,6 +214,7 @@ public struct SkillsData: Codable, Equatable, Sendable {
         proposals = each(SkillProposal.self, .proposals)
         records = each(SkillRecord.self, .records)
         outsideEdits = each(OutsideEdit.self, .outsideEdits)
+        unusedSkills = each(UnusedSkill.self, .unusedSkills)
         let raw = ((try? c.decodeIfPresent([String: JSONValue].self, forKey: .usage)) ?? nil) ?? [:]
         let encoder = JSONEncoder()
         for (name, value) in raw {
@@ -225,11 +244,12 @@ public struct SkillsData: Codable, Equatable, Sendable {
         try each(proposals, .proposals)
         try each(records, .records)
         try each(outsideEdits, .outsideEdits)
+        try each(unusedSkills, .unusedSkills)
     }
 
     public var isEmpty: Bool {
         usage.isEmpty && unreadableUsage.isEmpty && candidates.isEmpty && proposals.isEmpty && records.isEmpty
-            && outsideEdits.isEmpty && unreadableEntries.isEmpty
+            && outsideEdits.isEmpty && unusedSkills.isEmpty && unreadableEntries.isEmpty
     }
 
     /// Candidates marked as having a draft waiting whose draft has gone

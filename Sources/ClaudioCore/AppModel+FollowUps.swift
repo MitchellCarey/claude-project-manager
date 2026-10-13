@@ -46,6 +46,7 @@ extension AppModel {
         let skills = skillsData(inProject: projectID)
         let offers = skills.candidates.filter { $0.state == .offered && !draftingCandidates.contains($0.id) }.count
         return data.followUps.filter { $0.state != .working }.count + others + offers + skills.proposals.count
+            + skills.unusedSkills.count
     }
 
     // MARK: - Finding sessions ready for a follow-up
@@ -56,8 +57,10 @@ extension AppModel {
     public func checkFollowUps() async {
         // The same tick lets held-back work run (the daily limit at midnight, say).
         releaseHeldJobs()
-        // And looks for skills edited outside Claudio (in every mode).
+        // And looks for skills edited outside Claudio (in every mode), and,
+        // once a day, for skills nobody uses.
         checkSkillDrift()
+        checkUnusedSkills()
         for session in workspace.sessions {
             guard isAssistantOn(inProject: session.projectID), assistantMode(ofProject: session.projectID) == .automatic,
                   isFollowUpCandidate(session) else { continue }

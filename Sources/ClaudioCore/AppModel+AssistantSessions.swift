@@ -169,6 +169,8 @@ extension AppModel {
         // up once merged).
         let repository = workspace.project(projectID).map { SkillFiles.scan(inRoot: URL(fileURLWithPath: $0.path)).skills } ?? []
         if repositorySkills[projectID] ?? [] != repository { repositorySkills[projectID] = repository.isEmpty ? nil : repository }
+        let retired = assistantStore.retiredSkills(projectID: projectID)
+        if retiredSkills[projectID] ?? [] != retired { retiredSkills[projectID] = retired.isEmpty ? nil : retired }
     }
 
     /// The skills picked for an item's opening prompt (see `SkillChips`).

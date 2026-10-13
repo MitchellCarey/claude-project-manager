@@ -86,6 +86,10 @@ struct AssistantTool: View {
                         if let edit = model.outsideEdit(id, inProject: projectID) {
                             OutsideEditView(edit: edit, projectID: projectID).id(edit.id)
                         }
+                    case .unusedSkill(_, let id):
+                        if let unused = model.unusedSkill(id, inProject: projectID) {
+                            UnusedSkillView(unused: unused, projectID: projectID).id(unused.id)
+                        }
                     default: EmptyView()
                     }
                 } else {
@@ -157,6 +161,7 @@ extension AssistantTool {
         case .skillProposal(let projectID, let id)?:
             return model.skillProposal(id, inProject: projectID)?.isChange == true ? "Changed Skill" : "New Skill"
         case .outsideEdit?: return "Skill Change"
+        case .unusedSkill?: return "Unused Skill"
         default: return "Assistant"
         }
     }

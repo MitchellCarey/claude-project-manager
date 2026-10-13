@@ -32,6 +32,85 @@ struct SkillNeedsYouCards: View {
         ForEach(data.proposals.reversed()) { proposal in
             SkillProposalRow(proposal: proposal, projectID: projectID)
         }
+        ForEach(data.unusedSkills) { unused in
+            UnusedSkillRow(unused: unused, projectID: projectID)
+        }
+    }
+}
+
+/// Needs You: a skill no session has used for 30 days.
+private struct UnusedSkillRow: View {
+    @Environment(AppModel.self) private var model
+    let unused: UnusedSkill
+    let projectID: UUID
+    @State private var hovering = false
+
+    var body: some View {
+        Button { model.openUnusedSkill(unused.id, projectID: projectID) } label: {
+            HStack(alignment: .top, spacing: 9) {
+                Image(systemName: "moon.zzz").font(.system(size: 12)).foregroundStyle(DS.muted).padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Unused skill: \(unused.name)").font(DS.font(13)).foregroundStyle(DS.text).lineLimit(2)
+                    Text("Not used by any session for \(AppModel.unusedSkillDays) days").font(DS.font(11.5)).foregroundStyle(DS.dim)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(DS.dim).padding(.top, 3)
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 5).fill(hovering ? DS.border : DS.input))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(DS.border, lineWidth: 1))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Unused Skill: UNUSED SKILL, its last use, a preview, and Retire or Keep.
+struct UnusedSkillView: View {
+    @Environment(AppModel.self) private var model
+    let unused: UnusedSkill
+    let projectID: UUID
+
+    var body: some View {
+        let skill = model.skill(named: unused.name, inProject: projectID)?.skill
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    SkillTag(text: "UNUSED SKILL", color: DS.muted)
+                    Text(unused.name).font(DS.font(14, .bold)).foregroundStyle(DS.text).lineLimit(1)
+                }
+                Text("Not used by any session for \(AppModel.unusedSkillDays) days. Last used \(unused.lastUsed.formatted(date: .abbreviated, time: .omitted)).")
+                    .font(DS.font(12.5)).foregroundStyle(DS.muted).fixedSize(horizontal: false, vertical: true)
+                if let skill {
+                    Text(SkillText.body(of: skill.text))
+                        .font(DS.mono(11.5)).foregroundStyle(DS.text).lineLimit(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(RoundedRectangle(cornerRadius: 4).fill(DS.window))
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(DS.border, lineWidth: 1))
+                }
+                HStack(spacing: 8) {
+                    Button("Retire") { if model.retireUnusedSkill(unused.id, projectID: projectID) { model.closePlanItem() } }
+                        .buttonStyle(OutlineButtonStyle())
+                        .foregroundStyle(DS.red)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(DS.red, lineWidth: 1))
+                        .help("No session loads it. You can restore it from Skills.")
+                    Button("Keep") {
+                        model.keepUnusedSkill(unused.id, projectID: projectID)
+                        model.closePlanItem()
+                    }
+                    .buttonStyle(PrimaryButtonStyle(fontSize: 12, horizontalPadding: 12, verticalPadding: 4))
+                    .help("Ask again after another \(AppModel.unusedSkillDays) days without a use.")
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 2)
+                Text("Retired skills can be restored from Skills.").font(DS.font(11.5)).foregroundStyle(DS.dim)
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
@@ -349,6 +428,8 @@ private struct SkillListRowView: View {
             .background(RoundedRectangle(cornerRadius: 5).fill(hovering ? DS.border : DS.input))
             .overlay(RoundedRectangle(cornerRadius: 5).stroke(DS.border, lineWidth: 1))
             .contentShape(Rectangle())
+            // Retired skills are greyed out.
+            .opacity(row.location == .retired ? 0.55 : 1)
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -422,6 +503,15 @@ struct SkillDetailView: View {
                         }
                     }
                     if location == .claudio { saveToRepository }
+                    if location == .retired {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Retired: no session loads it.").font(DS.font(12)).foregroundStyle(DS.muted)
+                            Button("Restore") { _ = model.restoreSkill(name, projectID: projectID) }
+                                .buttonStyle(PrimaryButtonStyle(fontSize: 12, horizontalPadding: 12, verticalPadding: 4))
+                                .help("Sessions using the project's shared skills load it again.")
+                        }
+                        .padding(.top, 4)
+                    }
                 } else {
                     Text("This skill isn't there any more.").font(DS.font(12.5)).foregroundStyle(DS.dim)
                 }

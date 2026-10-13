@@ -382,6 +382,11 @@ public protocol AssistantStoring: AnyObject {
     /// An approved skill's `SKILL.md` in Claudio's root (nil: none on disk,
     /// as in memory), for the check for edits made outside Claudio.
     func approvedSkillFile(name: String, projectID: UUID) -> URL?
+    /// Retire: moves the skill to `retired/<name>/`, outside the `--add-dir`
+    /// root, so no session loads it. Restore moves it back.
+    func retireSkill(name: String, projectID: UUID) throws
+    func restoreSkill(name: String, projectID: UUID) throws
+    func retiredSkills(projectID: UUID) -> [ApprovedSkill]
 }
 
 /// One approved version of a skill, from its history.
@@ -427,6 +432,9 @@ extension AssistantStoring {
     public func sessionSkillsRoot(projectID: UUID, sessionID: UUID, skills: [String]) throws -> URL? { nil }
     public func removeSessionSkillsRoot(projectID: UUID, sessionID: UUID) throws {}
     public func approvedSkillFile(name: String, projectID: UUID) -> URL? { nil }
+    public func retireSkill(name: String, projectID: UUID) throws {}
+    public func restoreSkill(name: String, projectID: UUID) throws {}
+    public func retiredSkills(projectID: UUID) -> [ApprovedSkill] { [] }
 }
 
 /// Keeps assistant data in memory: the default, so tests and previews never
@@ -538,6 +546,20 @@ public final class MemoryAssistantStore: AssistantStoring {
         return URL(fileURLWithPath: "/memory/\(projectID.uuidString.lowercased())/sessions/\(sessionID.uuidString.lowercased())")
     }
     public func removeSessionSkillsRoot(projectID: UUID, sessionID: UUID) throws { sessionSkills[sessionID] = nil }
+    public var retired: [UUID: [ApprovedSkill]] = [:]
+    public func retireSkill(name: String, projectID: UUID) throws {
+        if let skillWriteError { throw skillWriteError }
+        guard let skill = skills[projectID]?.first(where: { $0.name == name }) else { return }
+        skills[projectID]?.removeAll { $0.name == name }
+        retired[projectID, default: []].append(skill)
+    }
+    public func restoreSkill(name: String, projectID: UUID) throws {
+        if let skillWriteError { throw skillWriteError }
+        guard let skill = retired[projectID]?.first(where: { $0.name == name }) else { return }
+        retired[projectID]?.removeAll { $0.name == name }
+        skills[projectID, default: []].append(skill)
+    }
+    public func retiredSkills(projectID: UUID) -> [ApprovedSkill] { retired[projectID] ?? [] }
 }
 
 /// `<root>/<project id>/assistant.json` and `audit.jsonl`, by default under
@@ -672,6 +694,28 @@ public final class AssistantFileStore: AssistantStoring {
             try manager.createSymbolicLink(at: link, withDestinationURL: approved.appendingPathComponent(name))
         }
         return root
+    }
+
+    public func retireSkill(name: String, projectID: UUID) throws {
+        guard SkillName.isValid(name) else { throw CocoaError(.fileWriteInvalidFileName) }
+        let from = directory(projectID: projectID).appendingPathComponent("skills/.claude/skills/\(name)")
+        let to = directory(projectID: projectID).appendingPathComponent("retired/\(name)")
+        try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: to.path) { try FileManager.default.removeItem(at: to) }
+        try FileManager.default.moveItem(at: from, to: to)
+    }
+
+    public func restoreSkill(name: String, projectID: UUID) throws {
+        guard SkillName.isValid(name) else { throw CocoaError(.fileWriteInvalidFileName) }
+        let from = directory(projectID: projectID).appendingPathComponent("retired/\(name)")
+        let to = directory(projectID: projectID).appendingPathComponent("skills/.claude/skills/\(name)")
+        guard !FileManager.default.fileExists(atPath: to.path) else { throw CocoaError(.fileWriteFileExists) }
+        try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: from, to: to)
+    }
+
+    public func retiredSkills(projectID: UUID) -> [ApprovedSkill] {
+        SkillFiles.scan(folder: directory(projectID: projectID).appendingPathComponent("retired")).skills
     }
 
     public func approvedSkillFile(name: String, projectID: UUID) -> URL? {

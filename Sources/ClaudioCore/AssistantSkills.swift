@@ -77,7 +77,11 @@ public enum SkillFiles {
     /// frontmatter with no closing `---` (that one is still listed, under
     /// its folder's name, as Claude Code may still load it).
     public static func scan(inRoot root: URL) -> SkillScan {
-        let skills = root.appendingPathComponent(".claude/skills")
+        scan(folder: root.appendingPathComponent(".claude/skills"))
+    }
+
+    /// The skills in a folder of skill folders (`<folder>/<name>/SKILL.md`).
+    public static func scan(folder skills: URL) -> SkillScan {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: skills.path) else { return SkillScan() }
         var scan = SkillScan()
         for name in names.sorted() where !name.hasPrefix(".") {
