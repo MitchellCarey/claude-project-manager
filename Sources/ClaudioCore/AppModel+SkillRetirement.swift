@@ -12,13 +12,15 @@ extension AppModel {
     public static let unusedSkillDays = 30
 
     /// The once-a-day check (from the 15 s tick).
+    /// Marks the day done only once a project was looked at, so turning
+    /// the assistant on later that day still gets a check.
     func checkUnusedSkills() {
         let today = DailyJobCount.day(of: now())
         guard unusedSkillCheckDay != today else { return }
+        let projects = workspace.projects.filter { isAssistantOn(inProject: $0.id) && !unreadableSkillsData.contains($0.id) }
+        guard !projects.isEmpty else { return }
         unusedSkillCheckDay = today
-        for project in workspace.projects where isAssistantOn(inProject: project.id) && !unreadableSkillsData.contains(project.id) {
-            findUnusedSkills(projectID: project.id)
-        }
+        for project in projects { findUnusedSkills(projectID: project.id) }
     }
 
     /// Cards for Claudio's skills last used `unusedSkillDays` ago or more:
@@ -107,7 +109,11 @@ extension AppModel {
     @discardableResult
     public func restoreSkill(_ name: String, projectID: UUID) -> Bool {
         guard (retiredSkills[projectID] ?? []).contains(where: { $0.name == name }) else { return false }
-        guard !existingSkillNames(projectID: projectID).contains(name) else {
+        // Taken since by an approved or repository skill (retired names
+        // are reserved for exactly this, so they don't count).
+        let taken = Set((approvedSkills[projectID] ?? []).flatMap { [$0.name, $0.folder] })
+            .union((repositorySkills[projectID] ?? []).map(\.name))
+        guard !taken.contains(name) else {
             showToast("A skill called \(name) exists now, so this one can't be restored")
             return false
         }

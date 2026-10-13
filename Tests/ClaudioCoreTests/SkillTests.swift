@@ -1333,7 +1333,11 @@ final class SkillTests: XCTestCase {
             XCTAssertTrue(d.model.keepOutsideEdit(edit.id, projectID: d.project))
             let record = try XCTUnwrap(d.model.skillsData(inProject: d.project).records.first)
             XCTAssertEqual(record.version, 2, "the change is its next version")
-            XCTAssertEqual(record.contentHash, SkillText.hash(edited))
+            let kept = try String(contentsOf: file, encoding: .utf8)
+            XCTAssertTrue(kept.contains("claudio-version: 2"), "the file says so too")
+            XCTAssertTrue(kept.contains("Run it anywhere."), "the change itself is kept")
+            XCTAssertEqual(record.contentHash, SkillText.hash(kept))
+            XCTAssertNotEqual(kept, edited)
             XCTAssertEqual(d.store.skillHistory(name: "linux-tests", projectID: d.project).map(\.version), [2, 1])
             d.model.checkSkillDrift()
             XCTAssertTrue(d.model.outsideEdits(inProject: d.project).isEmpty)
@@ -1548,6 +1552,98 @@ final class SkillTests: XCTestCase {
             XCTAssertTrue(f.model.unusedSkills(inProject: f.project).isEmpty)
             XCTAssertEqual(f.assistant.retired[f.project]?.map(\.name), ["linux-tests"])
             XCTAssertEqual(f.model.toast?.text, "Retired linux-tests. Restore it from Skills.")
+        }
+    }
+
+    // MARK: - Step 5b: the advisor's review before the PR
+
+    func testKeepChangeRefusesTextThatFailsTheChecks() async throws {
+        let d = try await makeDiskFixture()
+        let file = await MainActor.run { () -> URL in
+            let file = approveOnDisk(d)
+            d.model.checkSkillDrift()
+            return file
+        }
+        let leaky = try String(contentsOf: file, encoding: .utf8) + "\nUse ghp_abcdefghijklmnopqrstuvwxyz0123456789 to push.\n"
+        try leaky.write(to: file, atomically: true, encoding: .utf8)
+        try await MainActor.run {
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first)
+            XCTAssertTrue(d.model.outsideEditProblems(edit, inProject: d.project).contains { $0.hasPrefix("it looks like it holds a secret") })
+            XCTAssertFalse(d.model.keepOutsideEdit(edit.id, projectID: d.project), "only Revert is offered")
+            XCTAssertEqual(d.model.skillsData(inProject: d.project).records.first?.version, 1, "not approved")
+            XCTAssertFalse(d.model.log.entries.contains { ($0.detail ?? "").contains("ghp_") || $0.title.contains("ghp_") })
+            XCTAssertTrue(d.model.revertOutsideEdit(edit.id, projectID: d.project))
+        }
+    }
+
+    func testKeepChangeRefusesARename() async throws {
+        let d = try await makeDiskFixture()
+        let file = await MainActor.run { () -> URL in
+            let file = approveOnDisk(d)
+            d.model.checkSkillDrift()
+            return file
+        }
+        let renamed = try String(contentsOf: file, encoding: .utf8).replacingOccurrences(of: "name: linux-tests", with: "name: something-else")
+        try renamed.write(to: file, atomically: true, encoding: .utf8)
+        try await MainActor.run {
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first)
+            XCTAssertEqual(d.model.outsideEditProblems(edit, inProject: d.project), ["a change renames the skill"])
+        }
+    }
+
+    func testARetiredSkillsNameIsReserved() async throws {
+        let f = try await makeFixture()
+        await MainActor.run {
+            let first = propose(f, text: SkillTests.skillText("Old."))
+            XCTAssertTrue(f.model.approveSkillProposal(first.id, projectID: f.project))
+            XCTAssertTrue(f.model.retireSkill("linux-tests", projectID: f.project))
+            let second = propose(f, text: SkillTests.skillText("A new one with the same name."))
+            XCTAssertFalse(f.model.approveSkillProposal(second.id, projectID: f.project), "it could be restored, so the name is taken")
+            XCTAssertEqual(f.model.skillsData(inProject: f.project).records.map(\.location), [.retired], "the retired record is kept")
+            f.model.dismissSkillProposal(second.id, projectID: f.project)
+            XCTAssertTrue(f.model.restoreSkill("linux-tests", projectID: f.project), "and Restore still works")
+        }
+    }
+
+    func testAnEditByHandAfterASessionsEditIsntBlamedOnIt() async throws {
+        let d = try await makeDiskFixture()
+        let file = await MainActor.run { () -> URL in
+            let file = approveOnDisk(d)
+            d.model.checkSkillDrift()
+            return file
+        }
+        let line = d.session.uuidString + "\t" + History.json(["hook_event_name": "PostToolUse", "session_id": SkillTests.conversation,
+                                                                "tool_name": "Edit", "tool_input": ["file_path": file.path]]) + "\n"
+        try line.write(to: d.hookLog, atomically: true, encoding: .utf8)
+        try (try String(contentsOf: file, encoding: .utf8) + "\nBy the session.\n").write(to: file, atomically: true, encoding: .utf8)
+        try await MainActor.run {
+            d.model.pollHookEvents()
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first)
+            XCTAssertEqual(edit.editorName, "Update PR")
+            XCTAssertTrue(d.model.keepOutsideEdit(edit.id, projectID: d.project))
+        }
+        try (try String(contentsOf: file, encoding: .utf8) + "\nBy hand, later.\n").write(to: file, atomically: true, encoding: .utf8)
+        try await MainActor.run {
+            d.model.checkSkillDrift()
+            let edit = try XCTUnwrap(d.model.outsideEdits(inProject: d.project).first)
+            XCTAssertNil(edit.editorName, "the session's earlier edit was already used")
+        }
+    }
+
+    func testTurningTheAssistantOnLaterThatDayStillGetsTheCheck() async throws {
+        let f = try await makeFixture()
+        await MainActor.run {
+            let proposal = propose(f, text: SkillTests.skillText("Run it."))
+            XCTAssertTrue(f.model.approveSkillProposal(proposal.id, projectID: f.project))
+            f.model.updateSkillsData(f.project) { $0.usage["linux-tests"]?.lastUsed = SkillTests.now.addingTimeInterval(-31 * 86_400) }
+            f.model.setAssistantMode(.off, projectID: f.project)
+            f.model.checkUnusedSkills()
+            f.model.setAssistantMode(.automatic, projectID: f.project)
+            f.model.checkUnusedSkills()
+            XCTAssertEqual(f.model.unusedSkills(inProject: f.project).map(\.name), ["linux-tests"])
         }
     }
 }

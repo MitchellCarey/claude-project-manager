@@ -614,6 +614,8 @@ struct OutsideEditView: View {
     /// Read once the view opens, not on every redraw.
     @State private var approved: String?
     @State private var current: String?
+    /// The checks a draft must pass, run on the changed text.
+    @State private var problems: [String] = []
 
     var body: some View {
         ScrollView {
@@ -632,6 +634,18 @@ struct OutsideEditView: View {
                     Text("Claudio doesn't have the approved text, so it can't be put back.")
                         .font(DS.font(11.5)).foregroundStyle(DS.dim)
                 }
+                if !problems.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("CAN'T BE KEPT").font(DS.font(10.5, .extraBold)).kerning(0.6).foregroundStyle(DS.red)
+                        ForEach(problems, id: \.self) { problem in
+                            Label(SecretPatterns.redacted(problem), systemImage: "xmark.octagon")
+                                .font(DS.font(12)).foregroundStyle(DS.text).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(DS.red.opacity(0.12)))
+                }
                 HStack(spacing: 8) {
                     if edit.deleted {
                         Button("Restore") { if model.revertOutsideEdit(edit.id, projectID: projectID) { model.closePlanItem() } }
@@ -645,7 +659,8 @@ struct OutsideEditView: View {
                     } else {
                         Button("Keep Change") { if model.keepOutsideEdit(edit.id, projectID: projectID) { model.closePlanItem() } }
                             .buttonStyle(PrimaryButtonStyle(fontSize: 12, horizontalPadding: 12, verticalPadding: 4))
-                            .help("The file as it is becomes the skill's next version.")
+                            .disabled(!problems.isEmpty)
+                            .help(problems.isEmpty ? "The file as it is becomes the skill's next version." : "It doesn't pass Claudio's checks.")
                         Button("Revert") { if model.revertOutsideEdit(edit.id, projectID: projectID) { model.closePlanItem() } }
                             .buttonStyle(OutlineButtonStyle())
                             .disabled(approved == nil)
@@ -662,6 +677,7 @@ struct OutsideEditView: View {
         .task(id: edit.id) {
             approved = model.approvedText(of: edit.name, inProject: projectID)
             current = model.currentText(of: edit, inProject: projectID)
+            problems = model.outsideEditProblems(edit, inProject: projectID)
         }
     }
 }

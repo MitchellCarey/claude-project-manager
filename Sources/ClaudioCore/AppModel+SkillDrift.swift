@@ -56,11 +56,15 @@ extension AppModel {
         let open = skillsData(inProject: projectID).outsideEdits.first { $0.name == record.name && $0.location == record.location }
         guard hash != record.contentHash else {
             // Back as it was (put back by hand, say): nothing to ask.
+            skillFileEditors[AppModel.resolvedPath(url)] = nil
             if let open { updateSkillsData(projectID) { $0.outsideEdits.removeAll { $0.id == open.id } } }
             return
         }
         guard open?.foundHash != hash || open?.deleted != (text == nil) else { return }
-        let editor = skillFileEditors[AppModel.resolvedPath(url)]
+        let path = AppModel.resolvedPath(url)
+        let editor = skillFileEditors[path]
+        // Used once: a later edit by hand (or by Bash) isn't blamed on it.
+        skillFileEditors[path] = nil
         let edit = OutsideEdit(name: record.name, location: record.location, deleted: text == nil, foundHash: hash, foundAt: now(),
                                editorSessionID: editor, editorName: editor.flatMap { workspace.session($0)?.name })
         updateSkillsData(projectID) { data in
@@ -81,6 +85,10 @@ extension AppModel {
     func forgetSkillFileStamps(_ name: String, projectID: UUID) {
         for location in [SkillLocation.claudio, .repository] {
             skillFileStamps[AppModel.skillFileStampKey(name, location: location, projectID: projectID)] = nil
+            // Claudio wrote it: whoever edited it before isn't who changes it next.
+            if let url = skillFileURL(name, location: location, projectID: projectID) {
+                skillFileEditors[AppModel.resolvedPath(url)] = nil
+            }
         }
     }
 
@@ -111,7 +119,8 @@ extension AppModel {
     /// The approved text: the newest history version whose hash is the
     /// record's (nil when history doesn't have it, so Revert can't be offered).
     public func approvedText(of name: String, inProject projectID: UUID) -> String? {
-        guard let record = skillsData(inProject: projectID).records.first(where: { $0.name == name }) else { return nil }
+        guard let record = skillsData(inProject: projectID).records.first(where: { $0.name == name && $0.location != .retired })
+        else { return nil }
         return skillHistory(name, projectID: projectID).first { SkillText.hash($0.text) == record.contentHash }?.text
     }
 
@@ -130,14 +139,45 @@ extension AppModel {
         return "\(file) was \(verb) \(when)"
     }
 
+    /// What's wrong with the changed text, by the checks a draft must pass
+    /// (a secret, a renamed skill, a bad length): Keep Change is refused
+    /// while there's anything, so only Revert is offered.
+    public func outsideEditProblems(_ edit: OutsideEdit, inProject projectID: UUID) -> [String] {
+        guard !edit.deleted, let text = currentText(of: edit, inProject: projectID) else { return [] }
+        return skillProblemsNow(text, projectID: projectID, patching: edit.name)
+    }
+
     /// Keep Change: what's in the file now becomes the approved skill's
-    /// next version (kept in its history). The file isn't touched.
+    /// next version. Checked like a draft first. The file's
+    /// `claudio-version` is brought up to match, as one of Claudio's own
+    /// writes, and the result is kept in its history.
     @discardableResult
     public func keepOutsideEdit(_ id: UUID, projectID: UUID) -> Bool {
         guard let edit = outsideEdit(id, inProject: projectID), !edit.deleted,
-              let text = currentText(of: edit, inProject: projectID) else { return false }
+              let current = currentText(of: edit, inProject: projectID) else { return false }
+        let problems = skillProblemsNow(current, projectID: projectID, patching: edit.name)
+        guard problems.isEmpty else {
+            log.append(.error, "Assistant: the change to \(edit.name) wasn't kept: it fails Claudio's checks",
+                       detail: problems.map(SecretPatterns.redacted).joined(separator: "\n"))
+            showToast("The change doesn't pass Claudio's checks, so it can't be kept. Revert puts back the approved version.")
+            return false
+        }
+        let record = skillsData(inProject: projectID).records.first { $0.name == edit.name && $0.location == edit.location }
+        let version = (record?.version ?? 0) + 1
+        let text = SkillText.settingMetadata(current, [("claudio-version", String(version))])
+        do {
+            switch edit.location {
+            case .claudio: try assistantStore.writeApprovedSkill(name: edit.name, text: text, projectID: projectID)
+            case .repository:
+                guard let url = skillFileURL(edit.name, location: .repository, projectID: projectID) else { return false }
+                try text.write(to: url, atomically: true, encoding: .utf8)
+            case .retired: return false
+            }
+        } catch {
+            report("Couldn't keep the change to \(edit.name): \(AppModel.describe(error))")
+            return false
+        }
         let hash = SkillText.hash(text)
-        let version = (skillsData(inProject: projectID).records.first { $0.name == edit.name }?.version ?? 0) + 1
         do {
             try assistantStore.writeSkillHistory(name: edit.name, version: version, text: text, projectID: projectID)
         } catch {
@@ -147,7 +187,7 @@ extension AppModel {
         forgetSkillFileStamps(edit.name, projectID: projectID)
         updateSkillsData(projectID) { data in
             data.outsideEdits.removeAll { $0.id == id }
-            if let index = data.records.firstIndex(where: { $0.name == edit.name }) {
+            if let index = data.records.firstIndex(where: { $0.name == edit.name && $0.location == edit.location }) {
                 data.records[index].contentHash = hash
                 data.records[index].version = version
                 data.records[index].approvedAt = date

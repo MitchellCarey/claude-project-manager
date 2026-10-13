@@ -234,10 +234,10 @@ extension AppModel {
                                                                      commandExists: exists))
     }
 
-    /// Names a new skill can't take: approved skills' names and folders,
-    /// and the repository's own skills.
+    /// Names a new skill can't take: approved and retired skills' names
+    /// and folders (a retired one can be restored), and the repository's own.
     func existingSkillNames(projectID: UUID) -> Set<String> {
-        let approved = approvedSkills[projectID] ?? []
+        let approved = (approvedSkills[projectID] ?? []) + (retiredSkills[projectID] ?? [])
         var names = Set(approved.map(\.name)).union(approved.map(\.folder).filter { !$0.isEmpty })
         if let project = workspace.project(projectID) {
             let repository = (project.path as NSString).appendingPathComponent(".claude/skills")
@@ -362,7 +362,7 @@ extension AppModel {
             showToast("It doesn't pass Claudio's checks now, so it wasn't approved. The app's Activity Log (⌥⌘L) says why.")
             return false
         }
-        let record = skillsData(inProject: projectID).records.first { $0.name == proposal.name }
+        let record = skillsData(inProject: projectID).records.first { $0.name == proposal.name && $0.location == .claudio }
         let version = max(record?.version ?? 0, current?.version ?? 0) + 1
         let skillID = record?.id ?? current?.claudioID ?? SkillFiles.skill(fromSkillFile: proposal.text, folderName: "").claudioID ?? UUID()
         let text = SkillText.settingMetadata(proposal.text, [("claudio-id", skillID.uuidString.lowercased()),
@@ -385,7 +385,7 @@ extension AppModel {
         let recorded = updateSkillsData(projectID) { data in
             data.proposals.removeAll { $0.id == id }
             if let candidateID = proposal.candidateID { data.candidates.removeAll { $0.id == candidateID } }
-            data.records.removeAll { $0.name == proposal.name }
+            data.records.removeAll { $0.name == proposal.name && $0.location == .claudio }
             data.records.append(SkillRecord(id: skillID, name: proposal.name, version: version, approvedAt: date,
                                             contentHash: SkillText.hash(text)))
             // Approving counts as its last use (for 5b's unused check), so it
