@@ -282,16 +282,20 @@ final class SkillDraftTests: XCTestCase {
     func testARecordedDraftPassesTheChecks() throws {
         let result = CommandResult(exitCode: 0, output: try Fixtures.string("assistant-skill-draft.json"), errorOutput: "")
         guard case .success(let reply) = AssistantReplyParser.parse(result, timeout: 120) else { return XCTFail("expected a reply") }
-        let draft = try XCTUnwrap(SkillDraftJob.draft(from: reply.output, skills: [ApprovedSkill(name: "worktree-setup")]))
+        let draft = try XCTUnwrap(SkillDraftJob.draft(from: reply.output, skills: [ApprovedSkill(name: "worktree-setup")],
+                                                      tagCatalog: ["Code", "Research", "Testing", "Docs"]))
         XCTAssertEqual(draft.action, .new)
-        XCTAssertEqual(draft.name, "linux-test-checks")
+        XCTAssertEqual(draft.name, "linux-test-script")
+        XCTAssertEqual(draft.tags, ["Testing", "Code"], "from the catalog, as the evidence sessions were tagged")
         let text = SkillText.compose(name: draft.name, description: draft.description, whenToUse: draft.whenToUse, paths: draft.paths,
-                                     body: draft.body, metadata: [("claudio-version", "1")])
+                                     body: draft.body, metadata: [("claudio-version", "1")], tags: draft.tags)
         let context = SkillCheck.Context(projectPath: "/code/app", existingNames: ["worktree-setup"], patching: nil,
                                          commandExists: { _ in true }, fileExists: { $0 == "/code/app/scripts/test-linux.sh" })
         XCTAssertEqual(SkillCheck.problems(text, context: context), [])
-        XCTAssertEqual(SkillFiles.skill(fromSkillFile: text, folderName: "x").paths, ["Tests/**/*.swift", "scripts/test-linux.sh"])
-        XCTAssertEqual(reply.durationMS, 5232)
+        let skill = SkillFiles.skill(fromSkillFile: text, folderName: "x")
+        XCTAssertEqual(skill.paths, ["scripts/test-linux.sh", "Tests/**/*.swift"])
+        XCTAssertEqual(skill.tags, ["Testing", "Code"])
+        XCTAssertEqual(reply.durationMS, 4985)
     }
 
     // MARK: - Review round 1 (PR #38)
@@ -373,5 +377,44 @@ final class SkillDraftTests: XCTestCase {
         let saved = try JSONDecoder().decode(JSONValue.self, from: JSONFileStore.encoder.encode(SkillsData()))
         XCTAssertEqual(saved["version"], .number(1), "saved with its version")
         XCTAssertNoThrow(try JSONFileStore.decoder.decode(SkillsData.self, from: Data(#"{"usage":{}}"#.utf8)), "no version: 1")
+    }
+
+    // MARK: - Step 5b: tags
+
+    func testTagsReadBackWholeFromTheFrontmatter() {
+        let tags = ["Frontend", "UI, design", "Ops: on-call", "[beta]"]
+        let text = SkillText.compose(name: "a", description: "d", whenToUse: "", paths: [], body: "Body.",
+                                     metadata: [("claudio-version", "1")], tags: tags)
+        XCTAssertTrue(text.contains("  claudio-tags:\n    - \"Frontend\""), "one quoted name a line")
+        XCTAssertEqual(SkillFiles.skill(fromSkillFile: text, folderName: "a").tags, tags)
+        XCTAssertEqual(SkillFiles.skill(fromSkillFile: text, folderName: "a").version, 1, "other metadata still reads")
+        XCTAssertEqual(SkillFiles.skill(fromSkillFile: "---\nname: b\nmetadata:\n  claudio-tags: [Frontend, Ops]\n---\n",
+                                        folderName: "b").tags, ["Frontend", "Ops"], "the inline form too")
+    }
+
+    func testChipsScoreTheSessionsTags() {
+        let skills = [ApprovedSkill(name: "frontend-style", tags: ["Frontend"]), ApprovedSkill(name: "ops", tags: ["Ops"])]
+        XCTAssertEqual(SkillChips.pick(from: skills, touchedFiles: [], folderNames: [], tagNames: ["frontend"]).map(\.name),
+                       ["frontend-style"], "matched without regard to case")
+        XCTAssertEqual(SkillChips.pick(from: skills, touchedFiles: [], folderNames: [], tagNames: []), [])
+    }
+
+    func testDraftTagsComeOnlyFromTheCatalog() throws {
+        func draft(_ json: String) throws -> SkillDraft? {
+            SkillDraftJob.draft(from: try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8)), skills: [],
+                                tagCatalog: ["Frontend", "Ops"])
+        }
+        let tagged = try draft(#"{"action":"new","skill":null,"name":"a","description":"d","whenToUse":"","paths":[],"tags":["frontend","Made Up","Ops","ops"],"body":"b","why":""}"#)
+        XCTAssertEqual(tagged?.tags, ["Frontend", "Ops"], "spelled as the catalog spells them, once each; unknown names dropped")
+        let untagged = try draft(#"{"action":"new","skill":null,"name":"a","description":"d","whenToUse":"","paths":[],"body":"b","why":""}"#)
+        XCTAssertEqual(untagged?.tags, [], "a reply without tags has none")
+        let call = SkillDraftJob.request(candidate: LessonCandidate(signature: "s", summary: "x",
+                                                                    evidence: [LessonEvidence(sessionID: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00C04FC964FF")!, sessionName: "S", kind: .failure, text: "t", at: Date())],
+                                                                    remember: false, at: Date()),
+                                         projectName: "App", skills: [], tagCatalog: ["Frontend"],
+                                         sessionTags: [UUID(uuidString: "6F9619FF-8B86-D011-B42D-00C04FC964FF")!: ["Frontend"]])
+        XCTAssertTrue(call.input.contains(#""tagCatalog":["Frontend"]"#))
+        XCTAssertTrue(call.input.contains(#""sessionTags":["Frontend"]"#))
+        XCTAssertTrue(call.schema.contains(#""tags""#))
     }
 }

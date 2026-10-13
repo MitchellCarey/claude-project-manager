@@ -53,9 +53,8 @@ struct PlanSessionSheet: View {
                     .labelsHidden()
                     // Skills meant for a folder are picked for the one chosen.
                     .onChange(of: folderID) { _, folder in
-                        skills = model.suggestedSkills(forItem: item, inProject: projectID, folderID: folder)
-                            .filter { !removedSkills.contains($0) }
                         if !tagsEdited { tagIDs = Set(model.suggestedTags(name: name, folderID: folder)) }
+                        repickSkills()
                     }
                 }
                 GridRow {
@@ -68,6 +67,8 @@ struct PlanSessionSheet: View {
                             }
                         }
                     }
+                    // Skills meant for a tag are picked for the tags chosen.
+                    .onChange(of: tagIDs) { _, _ in repickSkills() }
                 }
                 if model.runsInBackground(prompt: promptBody) {
                     GridRow {
@@ -137,9 +138,14 @@ struct PlanSessionSheet: View {
             // The files its sessions touched, read from their history: the
             // picks may change once they're in.
             await model.refreshTouchedFiles(forItem: item, inProject: projectID)
-            skills = model.suggestedSkills(forItem: item, inProject: projectID, folderID: folderID)
-                .filter { !removedSkills.contains($0) }
+            repickSkills()
         }
+    }
+
+    /// The chips for the folder and tags chosen, without any you removed.
+    private func repickSkills() {
+        skills = model.suggestedSkills(forItem: item, inProject: projectID, folderID: folderID, tagIDs: Array(tagIDs))
+            .filter { !removedSkills.contains($0) }
     }
 
     private var folders: [(folder: Folder, depth: Int)] {

@@ -1007,4 +1007,54 @@ final class SkillTests: XCTestCase {
             XCTAssertEqual(saved.lessons, card.lessons, "kept with the card")
         }
     }
+
+    // MARK: - Step 5b: tags
+
+    @MainActor func addTag(_ f: Fixture, _ name: String) -> Tag {
+        f.model.addTag(named: name)!
+    }
+
+    func testChipsUseTheChosenTags() async throws {
+        let f = try await makeFixture()
+        await MainActor.run {
+            let frontend = addTag(f, "Frontend")
+            f.assistant.skills[f.project] = [ApprovedSkill(name: "frontend-style", tags: ["Frontend"]), ApprovedSkill(name: "used-by-frontend")]
+            f.model.refreshApprovedSkills(projectID: f.project)
+            let item = PlanItem(title: "Next", status: .planned, createdAt: SkillTests.now)
+            XCTAssertEqual(f.model.suggestedSkills(forItem: item, inProject: f.project), [])
+            XCTAssertEqual(f.model.suggestedSkills(forItem: item, inProject: f.project, tagIDs: [frontend.id]), ["frontend-style"])
+            // A Frontend session anywhere used the other skill.
+            f.model.applyTestSessionChange(f.session) { $0.tags = [frontend.id] }
+            let folder = f.model.createFolder(in: f.project)
+            f.model.updateSkillsData(f.project) { _ = $0.recordUse(of: "used-by-frontend", by: f.session, at: SkillTests.now) }
+            XCTAssertEqual(f.model.skillUsage(inProject: f.project, folderID: folder, tagIDs: [frontend.id]), ["used-by-frontend": 1],
+                           "counted by its tag, though it's in another folder")
+            XCTAssertEqual(f.model.suggestedSkills(forItem: item, inProject: f.project, folderID: folder, tagIDs: [frontend.id]),
+                           ["frontend-style", "used-by-frontend"])
+        }
+    }
+
+    func testADraftGetsTheSessionsTags() async throws {
+        let f = try await makeFixture()
+        await MainActor.run {
+            let frontend = addTag(f, "Frontend")
+            f.model.applyTestSessionChange(f.session) { $0.tags = [frontend.id] }
+            f.model.commandExistsOverride = { _ in true }
+        }
+        let draft = #"{"action":"new","skill":null,"name":"linux-tests","description":"Run the Linux tests.","whenToUse":"","paths":[],"tags":["Frontend","Nope"],"body":"Run them in Docker.","why":"x"}"#
+        answerFollowUpsAndDrafts(f, draft: draft, remember: true)
+        await followUp(f, session: f.session, remember: true)
+        let call = try XCTUnwrap(f.runner.calls.last)
+        XCTAssertTrue(call.contains { $0.contains(#""sessionTags":["Frontend"]"#) }, "the evidence sessions' tags")
+        try await MainActor.run {
+            let proposal = try XCTUnwrap(f.model.skillProposals(inProject: f.project).first)
+            XCTAssertEqual(SkillFiles.skill(fromSkillFile: proposal.text, folderName: "x").tags, ["Frontend"])
+            XCTAssertTrue(f.model.approveSkillProposal(proposal.id, projectID: f.project))
+            XCTAssertEqual(f.model.skillRows(inProject: f.project).first?.tags, ["Frontend"])
+            XCTAssertEqual(f.model.skillRows(inProject: f.project).first?.unknownTags, [])
+            let frontend = try XCTUnwrap(f.model.settings.tags.first { $0.name == "Frontend" })
+            f.model.renameTag(frontend.id, to: "Web")
+            XCTAssertEqual(f.model.skillRows(inProject: f.project).first?.unknownTags, ["Frontend"], "renamed in the catalog")
+        }
+    }
 }

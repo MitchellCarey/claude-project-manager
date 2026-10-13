@@ -106,6 +106,30 @@ private struct SkillProposalRow: View {
     }
 }
 
+/// A skill's `claudio-tags`, as the catalog's coloured chips; a name the
+/// catalog no longer has shows plainly.
+struct SkillTagChips: View {
+    @Environment(AppModel.self) private var model
+    let names: [String]
+
+    var body: some View {
+        if !names.isEmpty {
+            WrappingHStack(spacing: 4) {
+                ForEach(names, id: \.self) { name in
+                    if let tag = model.settings.tags.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+                        TagChip(tag: tag)
+                    } else {
+                        Text(name.uppercased())
+                            .font(DS.font(10.5, .extraBold)).kerning(0.4).foregroundStyle(DS.dim)
+                            .padding(.vertical, 2).padding(.horizontal, 7)
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(DS.border, lineWidth: 1))
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A small coloured tag: NEW SKILL, CHANGED SKILL, CLAUDIO.
 struct SkillTag: View {
     let text: String
@@ -313,7 +337,13 @@ private struct SkillListRowView: View {
                 if !row.description.isEmpty {
                     Text(row.description).font(DS.font(11.5)).foregroundStyle(DS.muted).lineLimit(2)
                 }
+                SkillTagChips(names: row.tags)
                 Text(meta).font(DS.font(11)).foregroundStyle(DS.dim)
+                if !row.unknownTags.isEmpty {
+                    Label("Not in your tags any more: \(row.unknownTags.joined(separator: ", "))", systemImage: "tag.slash")
+                        .font(DS.font(11)).foregroundStyle(DS.orange)
+                        .help("Renamed or deleted in Settings › Tags, so this skill no longer matches it. Edit the skill's claudio-tags to fix it.")
+                }
             }
             .padding(10)
             .background(RoundedRectangle(cornerRadius: 5).fill(hovering ? DS.border : DS.input))
@@ -352,6 +382,7 @@ struct SkillDetailView: View {
                     if let version = skill.version {
                         Text("Version \(version)").font(DS.font(11.5)).foregroundStyle(DS.dim)
                     }
+                    SkillTagChips(names: skill.tags)
                     let shown = shownVersion.flatMap { number in history.first { $0.version == number }?.text } ?? skill.text
                     Text(shown)
                         .font(DS.mono(11.5))

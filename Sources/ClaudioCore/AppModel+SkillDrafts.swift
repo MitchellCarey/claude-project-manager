@@ -117,7 +117,13 @@ extension AppModel {
         cancelHeldJob(key: .skillDraft(id))
         draftingCandidates.insert(id)
         let skills = approvedSkills[projectID] ?? []
-        let call = SkillDraftJob.request(candidate: candidate, projectName: project.name, skills: skills, model: settings.deepModel)
+        var sessionTags: [UUID: [String]] = [:]
+        for sessionID in candidate.sessionIDs {
+            if let session = workspace.session(sessionID) { sessionTags[sessionID] = tagNames(session.tags) }
+        }
+        let call = SkillDraftJob.request(candidate: candidate, projectName: project.name, skills: skills,
+                                         tagCatalog: self.settings.tags.map(\.name), sessionTags: sessionTags,
+                                         model: settings.deepModel)
         runAssistantJob(call, projectID: projectID, subject: id.uuidString, key: "skilldraft:\(id)", isBackground: !askedFor) {
             [weak self] result in
             guard let self else { return }
@@ -146,7 +152,7 @@ extension AppModel {
             reply = value
         }
         let skills = approvedSkills[projectID] ?? []
-        guard let draft = SkillDraftJob.draft(from: reply.output, skills: skills) else {
+        guard let draft = SkillDraftJob.draft(from: reply.output, skills: skills, tagCatalog: settings.tags.map(\.name)) else {
             log.append(.error, "Assistant: a skill draft came back in a form Claudio couldn't use",
                        detail: "lesson \(id.uuidString.lowercased()) (an unknown action, or a name that isn't a lower-case slug)")
             if askedFor { showToast("The draft came back in a form Claudio couldn't use, so it was dropped") }
@@ -168,7 +174,8 @@ extension AppModel {
                                      body: draft.body,
                                      metadata: [("claudio-id", skillID.uuidString.lowercased()),
                                                 ("claudio-evidence", evidence.joined(separator: ",")),
-                                                ("claudio-version", String(version))])
+                                                ("claudio-version", String(version))],
+                                     tags: draft.tags)
         var problems = await skillProblems(text, projectID: projectID, patching: patched?.name)
         problems += SecretPatterns.matches(in: draft.why).map { "its reason looks like it holds a secret (\($0))" }
         guard problems.isEmpty else {
@@ -421,6 +428,9 @@ public struct SkillListRow: Identifiable, Equatable, Sendable {
     public var id: String { name }
     public var name: String
     public var description: String
+    public var tags: [String] = []
+    /// Its tags that aren't in the catalog any more (renamed or deleted).
+    public var unknownTags: [String] = []
     public var version: Int?
     public var usedBy: Int
     public var lastUsed: Date?
@@ -434,7 +444,10 @@ extension AppModel {
         let data = skillsData(inProject: projectID)
         return (approvedSkills[projectID] ?? []).map { skill in
             let usage = data.usage[skill.name]
-            return SkillListRow(name: skill.name, description: skill.description, version: skill.version,
+            let catalog = Set(settings.tags.map { $0.name.lowercased() })
+            return SkillListRow(name: skill.name, description: skill.description,
+                                tags: skill.tags, unknownTags: skill.tags.filter { !catalog.contains($0.lowercased()) },
+                                version: skill.version,
                                 usedBy: usage?.sessions.count ?? 0, lastUsed: usage?.lastUsed,
                                 changedAt: data.records.first { $0.name == skill.name }?.approvedAt)
         }

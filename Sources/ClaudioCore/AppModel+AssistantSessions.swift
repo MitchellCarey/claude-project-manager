@@ -124,7 +124,8 @@ extension AppModel {
     /// `refreshTouchedFiles`), and from any whose Files Changed has loaded
     /// since; `folderID` is the folder the new session is going in (items
     /// have none), which also picks whose usage counts.
-    public func suggestedSkills(forItem item: PlanItem, inProject projectID: UUID, folderID: UUID? = nil) -> [String] {
+    public func suggestedSkills(forItem item: PlanItem, inProject projectID: UUID, folderID: UUID? = nil,
+                                tagIDs: [Tag.ID] = []) -> [String] {
         let skills = approvedSkills[projectID] ?? []
         guard !skills.isEmpty, let project = workspace.project(projectID) else { return [] }
         var sessionIDs = Set(notes(forItem: item.id, inProject: projectID).compactMap(\.sessionID))
@@ -135,8 +136,8 @@ extension AppModel {
         // The folder's own name and every ancestor's, so a skill meant for a
         // parent folder still applies to sessions nested under it.
         let folderNames = folderID.map { workspace.folderAndAncestorNames(of: $0) } ?? []
-        return SkillChips.pick(from: skills, touchedFiles: files.sorted(), folderNames: folderNames,
-                               usage: skillUsage(inProject: projectID, folderID: folderID)).map(\.name)
+        return SkillChips.pick(from: skills, touchedFiles: files.sorted(), folderNames: folderNames, tagNames: tagNames(tagIDs),
+                               usage: skillUsage(inProject: projectID, folderID: folderID, tagIDs: tagIDs)).map(\.name)
     }
 
     // MARK: - Start Session from a plan item
@@ -157,10 +158,11 @@ extension AppModel {
     /// with its skills.
     public func planSessionDraft(forItem item: PlanItem, inProject projectID: UUID) -> PlanSessionDraft {
         let inferred = Tag.infer(fromName: item.title, in: settings.tags)
+        let tagIDs = inferred.map { [$0] } ?? []
         return PlanSessionDraft(name: item.title, folderID: nil,
-                         tagIDs: inferred.map { [$0] } ?? [],
+                         tagIDs: tagIDs,
                          promptBody: openingPromptBody(forItem: item, inProject: projectID),
-                         skills: suggestedSkills(forItem: item, inProject: projectID))
+                         skills: suggestedSkills(forItem: item, inProject: projectID, tagIDs: tagIDs))
     }
 
     /// The item's title, its notes (oldest first) and its issue.
