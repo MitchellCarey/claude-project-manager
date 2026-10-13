@@ -55,6 +55,7 @@ extension AppModel {
         writeAssistantIndex()
         loadNeedsYou()
         loadSkillsData()
+        syncSkillSets()
         pollAssistantInbox()
     }
 
@@ -74,11 +75,58 @@ extension AppModel {
     /// The assistant's flags for a session's launch: a new session, a direct
     /// `--resume`, or a background resume that isn't continuing an agent (never
     /// one that is: that would copy it). Given whatever the project's mode:
-    /// Off means no Claude calls, not no notes.
-    func assistantLaunch(forProject projectID: UUID) -> AssistantLaunch? {
+    /// Off means no Claude calls, not no notes. A session with its own skill
+    /// set gets its own root; if that can't be made, the shared one (logged).
+    func assistantLaunch(for session: Session) -> AssistantLaunch? {
         let plugin = assistantPluginPath.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }
-        let launch = AssistantLaunch(pluginDirectory: plugin, skillsRoot: prepareSkillsRoot(projectID: projectID)?.path)
+        let root = session.skillSet != nil ? skillSetRoot(of: session) ?? prepareSkillsRoot(projectID: session.projectID)
+                                           : prepareSkillsRoot(projectID: session.projectID)
+        let launch = AssistantLaunch(pluginDirectory: plugin, skillsRoot: root?.path)
         return launch.isEmpty ? nil : launch
+    }
+
+    // MARK: - Skill sets (step 5b)
+
+    /// A session's own skills root, with its links brought up to date.
+    @discardableResult
+    func skillSetRoot(of session: Session) -> URL? {
+        guard let skills = session.skillSet else { return nil }
+        do {
+            return try assistantStore.sessionSkillsRoot(projectID: session.projectID, sessionID: session.id, skills: skills)
+        } catch {
+            log.append(.error, "Couldn't set up \(session.name)'s own skills, so it uses the project's shared ones",
+                       detail: AppModel.describe(error))
+            return nil
+        }
+    }
+
+    /// The skill item's session loads, from the item's view: its links
+    /// change at once, and a running session picks that up within seconds.
+    /// An empty set leaves it with no Claudio skills (its root can't change
+    /// once it's running).
+    public func setSkillSet(_ skills: [String], forSession sessionID: UUID) {
+        guard let session = workspace.session(sessionID), session.skillSet != nil else { return }
+        let approved = Set((approvedSkills[session.projectID] ?? []).map(\.name))
+        var names: [String] = []
+        for name in skills where approved.contains(name) && !names.contains(name) { names.append(name) }
+        guard names != session.skillSet else { return }
+        setSessionSkillSet(sessionID, names)
+        if let updated = workspace.session(sessionID) { skillSetRoot(of: updated) }
+        log.append(.info, "Changed the skills \(session.name) loads", detail: names.isEmpty ? "None" : names.joined(separator: ", "))
+    }
+
+    func removeSkillSet(of session: Session) {
+        do {
+            try assistantStore.removeSessionSkillsRoot(projectID: session.projectID, sessionID: session.id)
+        } catch {
+            log.append(.error, "Couldn't remove \(session.name)'s own skills folder", detail: AppModel.describe(error))
+        }
+    }
+
+    /// At launch: every skill set's links, in case skills moved while
+    /// Claudio was closed.
+    func syncSkillSets() {
+        for session in workspace.sessions where session.skillSet != nil { skillSetRoot(of: session) }
     }
 
     /// `index.tsv`, whenever the projects change (checked on every save,
@@ -208,6 +256,9 @@ extension AppModel {
                                         permissionMode: settings.defaultPermissionMode(background: runsInBackground(prompt: prompt)))
         request.useWorktree = useWorktree
         request.namedSkills = skills
+        // Its own set: only the skills chosen load. With none chosen, the
+        // shared skills, like any new session (Tim's call, step 5b).
+        request.skillSet = skills.isEmpty ? nil : skills
         request.tagIDs = tagIDs
         guard let sessionID = createSession(request) else { return nil }
         var after = item

@@ -1136,4 +1136,127 @@ final class SkillTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".claude/skills/linux-tests").path),
                        "never loaded twice")
     }
+
+    // MARK: - Step 5b: skill sets
+
+    @MainActor func approve(_ f: Fixture, _ names: [String]) {
+        f.assistant.skills[f.project] = names.map { ApprovedSkill(name: $0, folder: $0) }
+        f.model.refreshApprovedSkills(projectID: f.project)
+    }
+
+    @MainActor func planItem(_ f: Fixture) throws -> PlanItem {
+        let note = try XCTUnwrap(f.model.addNote("Shell height", author: .user, projectID: f.project, sessionID: nil))
+        return try XCTUnwrap(f.model.promoteNote(note.id, projectID: f.project, title: "Shell height"))
+    }
+
+    func testAPlanItemSessionWithSkillsGetsItsOwnSet() async throws {
+        let f = try await makeFixture()
+        let id = try await MainActor.run { () -> UUID in
+            approve(f, ["a-skill", "b-skill"])
+            let item = try planItem(f)
+            let id = try XCTUnwrap(f.model.startSession(fromItem: item.id, projectID: f.project, name: "S", folderID: nil, tagIDs: [],
+                                                       skills: ["a-skill", "not-approved"], useWorktree: false))
+            XCTAssertEqual(f.model.workspace.session(id)?.skillSet, ["a-skill"], "only approved skills")
+            return id
+        }
+        await f.model.lastTask?.value
+        await MainActor.run {
+            XCTAssertEqual(f.assistant.sessionSkills[id], ["a-skill"], "its links are made when it launches")
+        }
+    }
+
+    func testNoChipsMeansTheSharedSkills() async throws {
+        let f = try await makeFixture()
+        try await MainActor.run {
+            approve(f, ["a-skill"])
+            let item = try planItem(f)
+            let id = try XCTUnwrap(f.model.startSession(fromItem: item.id, projectID: f.project, name: "S", folderID: nil, tagIDs: [],
+                                                       skills: [], useWorktree: false))
+            XCTAssertNil(f.model.workspace.session(id)?.skillSet, "Tim's call: an empty set means the shared skills")
+            XCTAssertNil(f.assistant.sessionSkills[id])
+        }
+    }
+
+    func testASetChangesLiveAndOnlyHoldsApprovedSkills() async throws {
+        let f = try await makeFixture()
+        await MainActor.run {
+            approve(f, ["a-skill", "b-skill"])
+            f.model.setSessionSkillSet(f.session, ["a-skill"])
+            f.model.setSkillSet(["a-skill", "b-skill", "made-up"], forSession: f.session)
+            XCTAssertEqual(f.model.workspace.session(f.session)?.skillSet, ["a-skill", "b-skill"])
+            XCTAssertEqual(f.assistant.sessionSkills[f.session], ["a-skill", "b-skill"], "links updated at once")
+            f.model.setSkillSet([], forSession: f.session)
+            XCTAssertEqual(f.model.workspace.session(f.session)?.skillSet, [], "emptied while running: no Claudio skills")
+            XCTAssertEqual(f.assistant.sessionSkills[f.session], [])
+        }
+    }
+
+    func testASessionsLaunchUsesItsOwnRoot() async throws {
+        let f = try await makeFixture()
+        try await MainActor.run {
+            approve(f, ["a-skill"])
+            f.model.setSessionSkillSet(f.session, ["a-skill"])
+            XCTAssertTrue(f.model.start(f.session))
+            let launch = try XCTUnwrap(f.model.takePendingLaunch(f.session))
+            let own = "/memory/\(f.project.uuidString.lowercased())/sessions/\(f.session.uuidString.lowercased())"
+            XCTAssertTrue(launch.claudeArguments.containsSequence(["--add-dir", own]), "a direct --resume keeps its own set")
+        }
+    }
+
+    func testDeletingEverywhereRemovesTheSetButRemovingFromClaudioKeepsIt() async throws {
+        let f = try await makeFixture()
+        await MainActor.run {
+            approve(f, ["a-skill"])
+            f.model.setSessionSkillSet(f.session, ["a-skill"])
+            f.model.setSkillSet(["a-skill"], forSession: f.session)
+            _ = f.model.skillSetRoot(of: f.model.workspace.session(f.session)!)
+            f.model.deleteSession(f.session, .claudioOnly)
+            XCTAssertEqual(f.assistant.sessionSkills[f.session], ["a-skill"], "it can be restored, so its set stays")
+            f.model.restoreSession(f.session)
+            f.model.deleteSession(f.session, .everywhere)
+            XCTAssertNil(f.assistant.sessionSkills[f.session], "gone from Claude Code: its root goes too")
+        }
+    }
+
+    func testASkillSavedToTheRepositoryLeavesTheSets() async throws {
+        let (f, _) = try await makeRepositoryFixture()
+        await MainActor.run {
+            f.assistant.skills[f.project] = [SkillFiles.skill(fromSkillFile: SkillTests.skillText("Run it."), folderName: "linux-tests"),
+                                             ApprovedSkill(name: "other", folder: "other")]
+            f.model.refreshApprovedSkills(projectID: f.project)
+            f.model.setSessionSkillSet(f.session, ["linux-tests", "other"])
+            XCTAssertTrue(f.model.saveSkillToRepository("linux-tests", projectID: f.project))
+            XCTAssertEqual(f.model.workspace.session(f.session)?.skillSet, ["other"], "the repository's copy loads by itself")
+            XCTAssertEqual(f.assistant.sessionSkills[f.session], ["other"])
+        }
+    }
+
+    func testTheFileStoreLinksASessionsSkills() throws {
+        let store = AssistantFileStore(root: try makeTemporaryDirectory())
+        let project = UUID(), session = UUID()
+        for name in ["a-skill", "b-skill"] {
+            try store.writeApprovedSkill(name: name, text: "---\nname: \(name)\n---\n", projectID: project)
+        }
+        let root = try XCTUnwrap(try store.sessionSkillsRoot(projectID: project, sessionID: session, skills: ["a-skill", "gone", "../x"]))
+        XCTAssertEqual(SkillFiles.approved(inRoot: root).map(\.name), ["a-skill"], "missing and bad names are left out")
+        _ = try store.sessionSkillsRoot(projectID: project, sessionID: session, skills: ["b-skill"])
+        XCTAssertEqual(SkillFiles.approved(inRoot: root).map(\.name), ["b-skill"], "a link not in the set is removed")
+        let empty = try XCTUnwrap(try store.sessionSkillsRoot(projectID: project, sessionID: session, skills: []))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: empty.appendingPathComponent(".claude/skills").path),
+                      "the folder stays even when empty, so the session's root is always there")
+        try store.removeSessionSkillsRoot(projectID: project, sessionID: session)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+    }
+
+    func testASessionsSetSurvivesSaving() throws {
+        var session = Session(projectID: UUID(), name: "s", workingDirectory: "/code/app")
+        XCTAssertFalse(String(decoding: try JSONFileStore.encoder.encode(session), as: UTF8.self).contains("skillSet"),
+                       "nil isn't written")
+        session.skillSet = ["a-skill"]
+        XCTAssertEqual(try JSONFileStore.decoder.decode(Session.self, from: JSONFileStore.encoder.encode(session)).skillSet, ["a-skill"])
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONFileStore.encoder.encode(session)) as? [String: Any])
+        object["skillSet"] = 7
+        let odd = try JSONSerialization.data(withJSONObject: object)
+        XCTAssertNil(try JSONFileStore.decoder.decode(Session.self, from: odd).skillSet, "unreadable: the shared skills")
+    }
 }

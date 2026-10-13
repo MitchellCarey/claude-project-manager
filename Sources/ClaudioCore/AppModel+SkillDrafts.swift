@@ -526,6 +526,8 @@ extension AppModel {
     /// A skill left Claudio's root (saved to the repository, or retired):
     /// sessions with their own skill set lose their link to it.
     func skillLeftClaudiosRoot(_ name: String, projectID: UUID) {
-        // Filled in with the skill sets (step 5b, slice 3).
+        for session in workspace.sessions where session.projectID == projectID && (session.skillSet ?? []).contains(name) {
+            setSkillSet((session.skillSet ?? []).filter { $0 != name }, forSession: session.id)
+        }
     }
 }

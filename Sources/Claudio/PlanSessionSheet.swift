@@ -4,8 +4,8 @@ import SwiftUI
 
 /// New Session from Plan (design 9a): a session that opens with a plan
 /// item, its notes and linked issue, and the skills picked for it named in
-/// the prompt. Removing a chip only leaves that skill's name out: every
-/// approved skill stays available to the session.
+/// the prompt. With skills chosen, they're the only Claudio skills it loads
+/// (its own skill set, step 5b); with none, it gets every approved skill.
 struct PlanSessionSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -115,7 +115,8 @@ struct PlanSessionSheet: View {
                         removedSkills.insert(removed)
                     }
                 }
-                Text("Named in the opening prompt. Other approved skills stay available.")
+                Text(skills.isEmpty ? "No skills chosen, so every approved skill is available to it."
+                                    : "Only these skills are loaded in this session, and they're named in the opening prompt.")
                     .font(DS.font(11.5))
                     .foregroundStyle(DS.dim)
             }

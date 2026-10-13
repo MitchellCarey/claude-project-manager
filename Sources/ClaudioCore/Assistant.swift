@@ -374,6 +374,11 @@ public protocol AssistantStoring: AnyObject {
     /// Removes an approved skill's folder from Claudio's root (Save to
     /// Repository: the repository's copy takes over).
     func removeApprovedSkill(name: String, projectID: UUID) throws
+    /// A session's own skills root, `sessions/<id>/`, whose `.claude/skills`
+    /// holds links to just `skills` (approved ones that are there; others
+    /// are left out). Made if missing; links not in `skills` are removed.
+    func sessionSkillsRoot(projectID: UUID, sessionID: UUID, skills: [String]) throws -> URL?
+    func removeSessionSkillsRoot(projectID: UUID, sessionID: UUID) throws
 }
 
 /// One approved version of a skill, from its history.
@@ -416,6 +421,8 @@ extension AssistantStoring {
     public func writeSkillHistory(name: String, version: Int, text: String, projectID: UUID) throws {}
     public func skillHistory(name: String, projectID: UUID) -> [SkillVersion] { [] }
     public func removeApprovedSkill(name: String, projectID: UUID) throws {}
+    public func sessionSkillsRoot(projectID: UUID, sessionID: UUID, skills: [String]) throws -> URL? { nil }
+    public func removeSessionSkillsRoot(projectID: UUID, sessionID: UUID) throws {}
 }
 
 /// Keeps assistant data in memory: the default, so tests and previews never
@@ -516,6 +523,17 @@ public final class MemoryAssistantStore: AssistantStoring {
         if let skillWriteError { throw skillWriteError }
         skills[projectID]?.removeAll { $0.name == name || $0.folder == name }
     }
+    /// Each session's linked skills, as `sessionSkillsRoot` left them.
+    public var sessionSkills: [UUID: [String]] = [:]
+    /// Makes `sessionSkillsRoot` throw.
+    public var sessionSkillsError: Error?
+    public func sessionSkillsRoot(projectID: UUID, sessionID: UUID, skills: [String]) throws -> URL? {
+        if let sessionSkillsError { throw sessionSkillsError }
+        let approved = Set((self.skills[projectID] ?? []).map(\.name))
+        sessionSkills[sessionID] = skills.filter(approved.contains)
+        return URL(fileURLWithPath: "/memory/\(projectID.uuidString.lowercased())/sessions/\(sessionID.uuidString.lowercased())")
+    }
+    public func removeSessionSkillsRoot(projectID: UUID, sessionID: UUID) throws { sessionSkills[sessionID] = nil }
 }
 
 /// `<root>/<project id>/assistant.json` and `audit.jsonl`, by default under
@@ -628,6 +646,34 @@ public final class AssistantFileStore: AssistantStoring {
         let folder = directory(projectID: projectID).appendingPathComponent("history").appendingPathComponent(name)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try text.write(to: folder.appendingPathComponent("\(version).md"), atomically: true, encoding: .utf8)
+    }
+
+    public func sessionSkillsRoot(projectID: UUID, sessionID: UUID, skills: [String]) throws -> URL? {
+        let root = directory(projectID: projectID).appendingPathComponent("sessions").appendingPathComponent(sessionID.uuidString.lowercased())
+        let links = root.appendingPathComponent(".claude/skills")
+        let approved = directory(projectID: projectID).appendingPathComponent("skills/.claude/skills")
+        let manager = FileManager.default
+        try manager.createDirectory(at: links, withIntermediateDirectories: true)
+        let wanted = Set(skills.filter { SkillName.isValid($0) && manager.fileExists(atPath: approved.appendingPathComponent($0).path) })
+        for name in (try? manager.contentsOfDirectory(atPath: links.path)) ?? [] where !wanted.contains(name) {
+            try manager.removeItem(at: links.appendingPathComponent(name))
+        }
+        for name in wanted {
+            let link = links.appendingPathComponent(name)
+            // A link already there (even one whose target moved) is checked by
+            // what it points at, so a stale one is replaced.
+            if let target = try? manager.destinationOfSymbolicLink(atPath: link.path),
+               target == approved.appendingPathComponent(name).path { continue }
+            if (try? manager.attributesOfItem(atPath: link.path)) != nil { try manager.removeItem(at: link) }
+            try manager.createSymbolicLink(at: link, withDestinationURL: approved.appendingPathComponent(name))
+        }
+        return root
+    }
+
+    public func removeSessionSkillsRoot(projectID: UUID, sessionID: UUID) throws {
+        let root = directory(projectID: projectID).appendingPathComponent("sessions").appendingPathComponent(sessionID.uuidString.lowercased())
+        guard FileManager.default.fileExists(atPath: root.path) else { return }
+        try FileManager.default.removeItem(at: root)
     }
 
     public func removeApprovedSkill(name: String, projectID: UUID) throws {
