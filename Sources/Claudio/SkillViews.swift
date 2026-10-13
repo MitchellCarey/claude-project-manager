@@ -306,7 +306,7 @@ struct SkillsListView: View {
                 ForEach(rows) { row in
                     SkillListRowView(row: row, projectID: projectID)
                 }
-                Text("Skills are stored by Claudio, not in the repository. Every session Claudio starts in this project can use them.")
+                Text("CLAUDIO skills are stored by Claudio, not in the repository, and every session Claudio starts in this project can use them. REPOSITORY skills are in .claude/skills, for anyone with the repository.")
                     .font(DS.font(11.5))
                     .foregroundStyle(DS.dim)
                     .fixedSize(horizontal: false, vertical: true)
@@ -330,7 +330,7 @@ private struct SkillListRowView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     Text(row.name).font(DS.font(13, .bold)).foregroundStyle(DS.text).lineLimit(1)
-                    SkillTag(text: "CLAUDIO", color: DS.muted)
+                    SkillLocationTag(location: row.location)
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(DS.dim)
                 }
@@ -370,13 +370,21 @@ struct SkillDetailView: View {
     /// Read from disk once the view opens, not on every redraw.
     @State private var history: [SkillVersion] = []
 
+    @State private var confirmingSave = false
+
     var body: some View {
-        let skill = (model.approvedSkills[projectID] ?? []).first { $0.name == name }
+        let found = model.skill(named: name, inProject: projectID)
+        let skill = found?.skill
+        let location = found?.location ?? .claudio
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Text(name).font(DS.font(14, .bold)).foregroundStyle(DS.text).lineLimit(1)
-                    SkillTag(text: "CLAUDIO", color: DS.muted)
+                    SkillLocationTag(location: location)
+                }
+                if let skill, location == .repository {
+                    repositoryNote(savedByClaudio: model.skillsData(inProject: projectID).records
+                        .contains { $0.name == name && $0.location == .repository && $0.id == skill.claudioID })
                 }
                 if let skill {
                     if let version = skill.version {
@@ -413,6 +421,7 @@ struct SkillDetailView: View {
                             .buttonStyle(.plain)
                         }
                     }
+                    if location == .claudio { saveToRepository }
                 } else {
                     Text("This skill isn't there any more.").font(DS.font(12.5)).foregroundStyle(DS.dim)
                 }
@@ -422,6 +431,57 @@ struct SkillDetailView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task(id: skill?.version) { history = model.skillHistory(name, projectID: projectID) }
+    }
+
+    /// For a repository skill: where it is, and whether Claudio reviews edits.
+    private func repositoryNote(savedByClaudio: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(AppModel.repositorySkillPath(name)).font(DS.mono(11.5)).foregroundStyle(DS.muted).textSelection(.enabled)
+            Text(savedByClaudio ? "Edits made there show up in Needs You for review."
+                                : "Made in the repository: Claudio counts its use, but doesn't review edits to it.")
+                .font(DS.font(11.5)).foregroundStyle(DS.dim).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Save to Repository, with its confirmation in place.
+    @ViewBuilder private var saveToRepository: some View {
+        let project = model.workspace.project(projectID)?.name ?? "the project"
+        if confirmingSave {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Claudio copies this skill to \(AppModel.repositorySkillPath(name)) in \(project). Commit it to share it with anyone who clones the repository. From then on Claudio uses the repository copy.")
+                    .font(DS.font(12)).foregroundStyle(DS.text).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button("Save to Repository") {
+                        if model.saveSkillToRepository(name, projectID: projectID) { confirmingSave = false }
+                    }
+                    .buttonStyle(PrimaryButtonStyle(fontSize: 12, horizontalPadding: 12, verticalPadding: 4))
+                    LinkLabelButton(title: "Cancel") { confirmingSave = false }.font(DS.font(12))
+                    Spacer(minLength: 0)
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 5).fill(DS.input))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(DS.border, lineWidth: 1))
+            .padding(.top, 4)
+        } else {
+            Button("Save to Repository…") { confirmingSave = true }
+                .buttonStyle(OutlineButtonStyle())
+                .padding(.top, 4)
+                .help("Copy it into the repository, to commit and share")
+        }
+    }
+}
+
+/// CLAUDIO (grey), REPOSITORY (blue tint) or RETIRED.
+struct SkillLocationTag: View {
+    let location: SkillLocation
+
+    var body: some View {
+        switch location {
+        case .claudio: SkillTag(text: "CLAUDIO", color: DS.muted)
+        case .repository: SkillTag(text: "REPOSITORY", color: DS.blue)
+        case .retired: SkillTag(text: "RETIRED", color: DS.dim)
+        }
     }
 }
 #endif

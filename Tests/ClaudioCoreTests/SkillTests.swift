@@ -57,18 +57,19 @@ final class SkillTests: XCTestCase {
     /// A project at `/code/app` with one Completed session and its history
     /// file, signed in with an API key (so the gate needs no usage reading).
     func makeFixture(assistant: MemoryAssistantStore = MemoryAssistantStore(), lines: [String] = [History.prompt("Start")],
+                     projectPath: String = "/code/app",
                      clock: @escaping () -> Date = { SkillTests.now }) async throws -> Fixture {
         let runner = SkillRunner()
         runner.base.authOutput = #"{"loggedIn": true, "authMethod": "api_key"}"#
         let claudeHome = try makeTemporaryDirectory()
-        let directory = claudeHome.appendingPathComponent("projects/-code-app")
+        let directory = claudeHome.appendingPathComponent("projects").appendingPathComponent(SessionDiscovery.directoryName(forProjectPath: projectPath))
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let history = directory.appendingPathComponent("\(SkillTests.conversation).jsonl")
         try (lines.joined(separator: "\n") + "\n").write(to: history, atomically: true, encoding: .utf8)
         var state = PersistedState()
-        let project = state.workspace.addProject(path: "/code/app")
+        let project = state.workspace.addProject(path: projectPath)
         let session = Session(projectID: project, claudeSessionID: SkillTests.conversation, hasConversation: true, name: "Shell Height",
-                              workingDirectory: "/code/app", status: .completed, lastActivity: SkillTests.now.addingTimeInterval(-600))
+                              workingDirectory: projectPath, status: .completed, lastActivity: SkillTests.now.addingTimeInterval(-600))
         try state.workspace.addSession(session)
         let store = MemoryStore()
         store.state = state
@@ -1056,5 +1057,83 @@ final class SkillTests: XCTestCase {
             f.model.renameTag(frontend.id, to: "Web")
             XCTAssertEqual(f.model.skillRows(inProject: f.project).first?.unknownTags, ["Frontend"], "renamed in the catalog")
         }
+    }
+
+    // MARK: - Step 5b: repository skills and Save to Repository
+
+    /// A fixture whose project is a real (temporary) folder.
+    func makeRepositoryFixture(assistant: MemoryAssistantStore = MemoryAssistantStore()) async throws -> (Fixture, URL) {
+        let repo = try makeTemporaryDirectory()
+        return (try await makeFixture(assistant: assistant, projectPath: repo.path), repo)
+    }
+
+    func writeRepositorySkill(_ repo: URL, _ name: String, _ text: String) throws {
+        let folder = repo.appendingPathComponent(".claude/skills/\(name)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try text.write(to: folder.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+    }
+
+    func testTheRepositorysOwnSkillsAreListed() async throws {
+        let (f, repo) = try await makeRepositoryFixture()
+        try writeRepositorySkill(repo, "release-notes", "---\nname: release-notes\ndescription: Write release notes.\n---\nBody\n")
+        try writeHooks([["hook_event_name": "UserPromptSubmit", "session_id": SkillTests.conversation, "prompt": "/release-notes"]], f)
+        await MainActor.run {
+            f.model.refreshApprovedSkills(projectID: f.project)
+            let rows = f.model.skillRows(inProject: f.project)
+            XCTAssertEqual(rows.map(\.name), ["release-notes"])
+            XCTAssertEqual(rows.first?.location, .repository)
+            XCTAssertEqual(rows.first?.savedByClaudio, false, "yours, so Claudio doesn't review edits to it")
+            f.model.pollHookEvents()
+            XCTAssertEqual(f.model.skillRows(inProject: f.project).first?.usedBy, 1, "its use is counted")
+            XCTAssertEqual(f.model.skill(named: "release-notes", inProject: f.project)?.location, .repository)
+        }
+    }
+
+    func testSaveToRepositoryMovesTheSkill() async throws {
+        let (f, repo) = try await makeRepositoryFixture()
+        try await MainActor.run {
+            let proposal = propose(f, text: SkillTests.skillText("Run it in Docker."))
+            XCTAssertTrue(f.model.approveSkillProposal(proposal.id, projectID: f.project))
+            XCTAssertTrue(f.model.saveSkillToRepository("linux-tests", projectID: f.project))
+            let file = repo.appendingPathComponent(".claude/skills/linux-tests/SKILL.md")
+            let text = try String(contentsOf: file, encoding: .utf8)
+            XCTAssertEqual(SkillText.body(of: text), "Run it in Docker.")
+            XCTAssertTrue(f.assistant.skills[f.project]?.isEmpty ?? true, "Claudio's copy is gone, so it doesn't load twice")
+            let record = try XCTUnwrap(f.model.skillsData(inProject: f.project).records.first)
+            XCTAssertEqual(record.location, .repository)
+            XCTAssertEqual(record.contentHash, SkillText.hash(text), "the copy it wrote, for reviewing edits later")
+            let row = try XCTUnwrap(f.model.skillRows(inProject: f.project).first)
+            XCTAssertEqual(row.location, .repository)
+            XCTAssertTrue(row.savedByClaudio)
+            XCTAssertEqual(f.model.toast?.text, "Saved linux-tests to the repository. Commit .claude/skills/linux-tests/SKILL.md to share it.")
+        }
+    }
+
+    func testSaveToRepositoryWontOverwriteTheRepositorysSkill() async throws {
+        let (f, repo) = try await makeRepositoryFixture()
+        try writeRepositorySkill(repo, "linux-tests", "---\nname: linux-tests\ndescription: Theirs.\n---\nTheirs\n")
+        await MainActor.run {
+            f.assistant.skills[f.project] = [SkillFiles.skill(fromSkillFile: SkillTests.skillText("Mine."), folderName: "linux-tests")]
+            f.model.refreshApprovedSkills(projectID: f.project)
+            XCTAssertFalse(f.model.saveSkillToRepository("linux-tests", projectID: f.project))
+            XCTAssertEqual(f.model.toast?.text, "The repository already has a skill called linux-tests, so this one wasn't saved there")
+            XCTAssertEqual(f.assistant.skills[f.project]?.count, 1, "Claudio's copy stays")
+        }
+        let theirs = try String(contentsOf: repo.appendingPathComponent(".claude/skills/linux-tests/SKILL.md"), encoding: .utf8)
+        XCTAssertTrue(theirs.contains("Theirs"), "untouched")
+    }
+
+    func testAFailedRemovalTakesTheRepositoryCopyBack() async throws {
+        let assistant = MemoryAssistantStore()
+        let (f, repo) = try await makeRepositoryFixture(assistant: assistant)
+        await MainActor.run {
+            assistant.skills[f.project] = [SkillFiles.skill(fromSkillFile: SkillTests.skillText("Mine."), folderName: "linux-tests")]
+            f.model.refreshApprovedSkills(projectID: f.project)
+            assistant.skillWriteError = CocoaError(.fileWriteNoPermission)
+            XCTAssertFalse(f.model.saveSkillToRepository("linux-tests", projectID: f.project))
+            XCTAssertNotNil(f.model.errorMessage)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".claude/skills/linux-tests").path),
+                       "never loaded twice")
     }
 }

@@ -371,6 +371,9 @@ public protocol AssistantStoring: AnyObject {
     func writeSkillHistory(name: String, version: Int, text: String, projectID: UUID) throws
     /// A skill's approved versions, newest first.
     func skillHistory(name: String, projectID: UUID) -> [SkillVersion]
+    /// Removes an approved skill's folder from Claudio's root (Save to
+    /// Repository: the repository's copy takes over).
+    func removeApprovedSkill(name: String, projectID: UUID) throws
 }
 
 /// One approved version of a skill, from its history.
@@ -412,6 +415,7 @@ extension AssistantStoring {
     public func writeApprovedSkill(name: String, text: String, projectID: UUID) throws {}
     public func writeSkillHistory(name: String, version: Int, text: String, projectID: UUID) throws {}
     public func skillHistory(name: String, projectID: UUID) -> [SkillVersion] { [] }
+    public func removeApprovedSkill(name: String, projectID: UUID) throws {}
 }
 
 /// Keeps assistant data in memory: the default, so tests and previews never
@@ -507,6 +511,10 @@ public final class MemoryAssistantStore: AssistantStoring {
     }
     public func skillHistory(name: String, projectID: UUID) -> [SkillVersion] {
         (skillVersions[projectID]?[name] ?? []).sorted { $0.version > $1.version }
+    }
+    public func removeApprovedSkill(name: String, projectID: UUID) throws {
+        if let skillWriteError { throw skillWriteError }
+        skills[projectID]?.removeAll { $0.name == name || $0.folder == name }
     }
 }
 
@@ -620,6 +628,13 @@ public final class AssistantFileStore: AssistantStoring {
         let folder = directory(projectID: projectID).appendingPathComponent("history").appendingPathComponent(name)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try text.write(to: folder.appendingPathComponent("\(version).md"), atomically: true, encoding: .utf8)
+    }
+
+    public func removeApprovedSkill(name: String, projectID: UUID) throws {
+        guard SkillName.isValid(name) else { throw CocoaError(.fileWriteInvalidFileName) }
+        let folder = directory(projectID: projectID).appendingPathComponent("skills/.claude/skills").appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: folder.path) else { return }
+        try FileManager.default.removeItem(at: folder)
     }
 
     public func skillHistory(name: String, projectID: UUID) -> [SkillVersion] {

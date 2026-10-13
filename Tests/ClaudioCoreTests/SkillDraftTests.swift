@@ -373,9 +373,9 @@ final class SkillDraftTests: XCTestCase {
     }
 
     func testANewerSkillsFileIsRefused() throws {
-        XCTAssertThrowsError(try JSONFileStore.decoder.decode(SkillsData.self, from: Data(#"{"version":2,"usage":{}}"#.utf8)))
+        XCTAssertThrowsError(try JSONFileStore.decoder.decode(SkillsData.self, from: Data(#"{"version":3,"usage":{}}"#.utf8)))
         let saved = try JSONDecoder().decode(JSONValue.self, from: JSONFileStore.encoder.encode(SkillsData()))
-        XCTAssertEqual(saved["version"], .number(1), "saved with its version")
+        XCTAssertEqual(saved["version"], .number(Double(SkillsData.currentVersion)), "saved with its version")
         XCTAssertNoThrow(try JSONFileStore.decoder.decode(SkillsData.self, from: Data(#"{"usage":{}}"#.utf8)), "no version: 1")
     }
 
@@ -416,5 +416,29 @@ final class SkillDraftTests: XCTestCase {
         XCTAssertTrue(call.input.contains(#""tagCatalog":["Frontend"]"#))
         XCTAssertTrue(call.input.contains(#""sessionTags":["Frontend"]"#))
         XCTAssertTrue(call.schema.contains(#""tags""#))
+    }
+
+    // MARK: - Step 5b: records' location
+
+    func testRecordsKnowWhereTheSkillLives() throws {
+        let old = #"{"version":1,"usage":{},"candidates":[],"proposals":[],"records":[{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","name":"a","version":1,"approvedAt":"2026-10-01T10:00:00Z","contentHash":"x"}]}"#
+        let data = try JSONFileStore.decoder.decode(SkillsData.self, from: Data(old.utf8))
+        XCTAssertEqual(data.records.first?.location, .claudio, "a 5a record is Claudio's")
+        var moved = data
+        moved.records[0].location = .repository
+        let saved = try JSONDecoder().decode(JSONValue.self, from: JSONFileStore.encoder.encode(moved))
+        XCTAssertEqual(saved["version"], .number(2), "a newer file, so a 5a build leaves it alone")
+        XCTAssertEqual(try JSONFileStore.decoder.decode(SkillsData.self, from: JSONFileStore.encoder.encode(moved)).records.first?.location,
+                       .repository)
+    }
+
+    func testTheFileStoreRemovesAnApprovedSkill() throws {
+        let store = AssistantFileStore(root: try makeTemporaryDirectory())
+        let project = UUID()
+        try store.writeApprovedSkill(name: "a", text: "---\nname: a\n---\n", projectID: project)
+        XCTAssertEqual(store.approvedSkills(projectID: project).map(\.name), ["a"])
+        try store.removeApprovedSkill(name: "a", projectID: project)
+        XCTAssertEqual(store.approvedSkills(projectID: project), [])
+        XCTAssertThrowsError(try store.removeApprovedSkill(name: "../x", projectID: project))
     }
 }

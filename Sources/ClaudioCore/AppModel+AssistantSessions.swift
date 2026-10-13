@@ -117,6 +117,10 @@ extension AppModel {
         let scan = assistantStore.scanSkills(projectID: projectID)
         logSkillProblems(scan.problems, projectID: projectID)
         if approvedSkills[projectID] != scan.skills { approvedSkills[projectID] = scan.skills }
+        // The repository's own: in its main checkout (worktrees' copies show
+        // up once merged).
+        let repository = workspace.project(projectID).map { SkillFiles.scan(inRoot: URL(fileURLWithPath: $0.path)).skills } ?? []
+        if repositorySkills[projectID] ?? [] != repository { repositorySkills[projectID] = repository.isEmpty ? nil : repository }
     }
 
     /// The skills picked for an item's opening prompt (see `SkillChips`).

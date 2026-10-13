@@ -425,8 +425,11 @@ extension AppModel {
 /// A row of Skills (⋯): an approved skill, with how many sessions used it
 /// and when it last changed.
 public struct SkillListRow: Identifiable, Equatable, Sendable {
-    public var id: String { name }
+    public var id: String { "\(location.rawValue):\(name)" }
     public var name: String
+    public var location: SkillLocation = .claudio
+    /// A repository skill Claudio saved there (so it reviews edits to it).
+    public var savedByClaudio = false
     public var description: String
     public var tags: [String] = []
     /// Its tags that aren't in the catalog any more (renamed or deleted).
@@ -440,16 +443,89 @@ public struct SkillListRow: Identifiable, Equatable, Sendable {
 }
 
 extension AppModel {
+    /// Claudio's skills, then the repository's (CLAUDIO and REPOSITORY in the list).
     public func skillRows(inProject projectID: UUID) -> [SkillListRow] {
         let data = skillsData(inProject: projectID)
-        return (approvedSkills[projectID] ?? []).map { skill in
+        let catalog = Set(settings.tags.map { $0.name.lowercased() })
+        func row(_ skill: ApprovedSkill, _ location: SkillLocation) -> SkillListRow {
             let usage = data.usage[skill.name]
-            let catalog = Set(settings.tags.map { $0.name.lowercased() })
-            return SkillListRow(name: skill.name, description: skill.description,
+            let record = data.records.first { $0.name == skill.name && $0.location == location }
+            return SkillListRow(name: skill.name, location: location, savedByClaudio: location == .repository && record != nil,
+                                description: skill.description,
                                 tags: skill.tags, unknownTags: skill.tags.filter { !catalog.contains($0.lowercased()) },
                                 version: skill.version,
                                 usedBy: usage?.sessions.count ?? 0, lastUsed: usage?.lastUsed,
-                                changedAt: data.records.first { $0.name == skill.name }?.approvedAt)
+                                changedAt: record?.approvedAt)
         }
+        return (approvedSkills[projectID] ?? []).map { row($0, .claudio) }
+            + (repositorySkills[projectID] ?? []).map { row($0, .repository) }
+    }
+
+    /// A skill by name: Claudio's, else the repository's.
+    public func skill(named name: String, inProject projectID: UUID) -> (skill: ApprovedSkill, location: SkillLocation)? {
+        if let skill = (approvedSkills[projectID] ?? []).first(where: { $0.name == name }) { return (skill, .claudio) }
+        if let skill = (repositorySkills[projectID] ?? []).first(where: { $0.name == name }) { return (skill, .repository) }
+        return nil
+    }
+
+    /// Where Save to Repository puts a skill, relative to the repository.
+    public static func repositorySkillPath(_ name: String) -> String { ".claude/skills/\(name)/SKILL.md" }
+
+    /// Save to Repository: copies a Claudio skill into the repository's
+    /// `.claude/skills/<name>/`, then removes Claudio's copy, so sessions
+    /// don't load it twice. It's yours to commit; Claudio still counts its
+    /// use and reviews edits to it. Refused when the repository already
+    /// has a skill of that name.
+    @discardableResult
+    public func saveSkillToRepository(_ name: String, projectID: UUID) -> Bool {
+        guard let project = workspace.project(projectID), SkillName.isValid(name),
+              let skill = (approvedSkills[projectID] ?? []).first(where: { $0.name == name }) else { return false }
+        guard !unreadableSkillsData.contains(projectID) else {
+            report("This project's skills file couldn't be read, so skills can't be moved. See the Activity Log.")
+            return false
+        }
+        let folder = URL(fileURLWithPath: project.path).appendingPathComponent(".claude/skills").appendingPathComponent(name)
+        guard !FileManager.default.fileExists(atPath: folder.path) else {
+            showToast("The repository already has a skill called \(name), so this one wasn't saved there")
+            return false
+        }
+        let file = folder.appendingPathComponent("SKILL.md")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try skill.text.write(to: file, atomically: true, encoding: .utf8)
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            report("Couldn't save \(name) to the repository: \(AppModel.describe(error))")
+            return false
+        }
+        do {
+            try assistantStore.removeApprovedSkill(name: skill.folder.isEmpty ? name : skill.folder, projectID: projectID)
+        } catch {
+            // Both copies would load: take the repository's back out.
+            try? FileManager.default.removeItem(at: folder)
+            report("Couldn't move \(name) out of Claudio's skills, so it wasn't saved to the repository: \(AppModel.describe(error))")
+            return false
+        }
+        let hash = SkillText.hash(skill.text)
+        updateSkillsData(projectID) { data in
+            if let index = data.records.firstIndex(where: { $0.name == name }) {
+                data.records[index].location = .repository
+                data.records[index].contentHash = hash
+            } else {
+                data.records.append(SkillRecord(id: skill.claudioID ?? UUID(), name: name, version: skill.version ?? 1,
+                                                approvedAt: now(), contentHash: hash, location: .repository))
+            }
+        }
+        skillLeftClaudiosRoot(name, projectID: projectID)
+        refreshApprovedSkills(projectID: projectID)
+        log.append(.info, "Saved the skill \(name) to \(project.name)'s repository", detail: AppModel.repositorySkillPath(name))
+        showToast("Saved \(name) to the repository. Commit \(AppModel.repositorySkillPath(name)) to share it.")
+        return true
+    }
+
+    /// A skill left Claudio's root (saved to the repository, or retired):
+    /// sessions with their own skill set lose their link to it.
+    func skillLeftClaudiosRoot(_ name: String, projectID: UUID) {
+        // Filled in with the skill sets (step 5b, slice 3).
     }
 }

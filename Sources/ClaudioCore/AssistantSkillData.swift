@@ -82,32 +82,57 @@ public struct SkillProposal: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// An approved skill Claudio manages: its version, and the hash of the
-/// text it approved (for step 5b's check for edits made outside Claudio).
+/// Where an approved skill lives.
+public enum SkillLocation: String, Codable, Sendable {
+    /// Claudio's `--add-dir` root: every Claudio session in the project loads it.
+    case claudio
+    /// `<repo>/.claude/skills`, after Save to Repository: yours to commit.
+    case repository
+    /// `retired/`, outside the root: no session loads it (step 5b).
+    case retired
+}
+
+/// An approved skill Claudio manages: its version, where it lives, and the
+/// hash of the text it approved (for the check for edits made outside Claudio).
 public struct SkillRecord: Codable, Equatable, Sendable {
     /// `metadata.claudio-id`.
     public var id: UUID
     public var name: String
     public var version: Int
     public var approvedAt: Date
-    /// `SkillText.hash` of the file as approved.
+    /// `SkillText.hash` of the file as approved (or as Claudio last wrote it).
     public var contentHash: String
+    public var location: SkillLocation = .claudio
 
-    public init(id: UUID, name: String, version: Int, approvedAt: Date, contentHash: String) {
+    public init(id: UUID, name: String, version: Int, approvedAt: Date, contentHash: String, location: SkillLocation = .claudio) {
         self.id = id
         self.name = name
         self.version = version
         self.approvedAt = approvedAt
         self.contentHash = contentHash
+        self.location = location
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name, version, approvedAt, contentHash, location }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        version = try c.decode(Int.self, forKey: .version)
+        approvedAt = try c.decode(Date.self, forKey: .approvedAt)
+        contentHash = try c.decode(String.self, forKey: .contentHash)
+        location = try c.decodeIfPresent(SkillLocation.self, forKey: .location) ?? .claudio
     }
 }
 
 /// What a project's `skills.json` holds.
 public struct SkillsData: Codable, Equatable, Sendable {
-    /// 1: usage, candidates, proposals and records. Bump it for any new
-    /// field or candidate state: an older build then leaves a newer file
-    /// alone (read-only) rather than drop what it doesn't know.
-    public static let currentVersion = 1
+    /// 1: usage, candidates, proposals and records. 2 (step 5b): a record's
+    /// location, and what 5b adds. Bump it for any new field or candidate
+    /// state: an older build then leaves a newer file alone (read-only)
+    /// rather than drop what it doesn't know.
+    public static let currentVersion = 2
     /// By skill name (what `/name` calls).
     public var usage: [String: SkillUsage] = [:]
     /// Usage entries that couldn't be read, kept as they were.
