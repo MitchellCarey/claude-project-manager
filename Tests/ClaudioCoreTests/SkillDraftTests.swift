@@ -42,7 +42,7 @@ final class SkillDraftTests: XCTestCase {
         XCTAssertEqual(LessonSignature.commandHead("FOO=1 sudo ./scripts/test-linux.sh --filter X"), "test-linux.sh")
         XCTAssertEqual(LessonSignature.commandHead("git worktree add ../w"), "git worktree")
         XCTAssertEqual(LessonSignature.errorHead("Exit code 128\nfatal: '/tmp/a/b' is already checked out at '/x/y' (3 times, abc1234def)"),
-                       "fatal: '<path>' is already checked out at '<path>' (# times, #)")
+                       "fatal: '<path>' is already checked out at '<path>' (# times", "up to its first clause")
         func failure(_ command: String, _ error: String) -> SessionDigest.Evidence {
             SessionDigest.Evidence(ref: "f1", kind: .failure, tool: "Bash", command: command, text: error)
         }
@@ -440,5 +440,51 @@ final class SkillDraftTests: XCTestCase {
         try store.removeApprovedSkill(name: "a", projectID: project)
         XCTAssertEqual(store.approvedSkills(projectID: project), [])
         XCTAssertThrowsError(try store.removeApprovedSkill(name: "../x", projectID: project))
+    }
+
+    // MARK: - Tim's two worktree-guard lessons (2026-10-14)
+
+    /// The guard's message, from his two sessions (paths shortened).
+    static let guardRunsGh = "This session is isolated in the worktree /Users/tim/Documents/Code/claude-project-manager/.claude/worktrees/session-tags, but this command runs gh with the text {user: .user.login, state: .state,… inside a construct too complex to verify"
+    static let guardTooComplex = "This session is isolated in the worktree /Users/tim/Documents/Code/claude-project-manager/.claude/worktrees/x, but this command is too complex to verify that it stays inside the worktree."
+
+    func testShellSyntaxAndTheFirstClauseGroupTheseFailures() {
+        XCTAssertEqual(LessonSignature.commandHead("for id in 1 2; do gh api repos/x/pulls/$id --jq '{user: .user.login}'; done"), "shell")
+        XCTAssertEqual(LessonSignature.commandHead("s=$(gh api x) && echo $s"), "shell")
+        XCTAssertEqual(LessonSignature.commandHead("if [ -d x ]; then ls x; fi"), "shell")
+        XCTAssertEqual(LessonSignature.commandHead("gh pr view 12"), "gh pr", "a plain command keeps its words")
+        func failure(_ command: String, _ error: String) -> SessionDigest.Evidence {
+            SessionDigest.Evidence(ref: "f1", kind: .failure, tool: "Bash", command: command, text: error)
+        }
+        let first = LessonSignature.of(failure("for id in 1 2; do gh api x/$id; done", SkillDraftTests.guardRunsGh))
+        let second = LessonSignature.of(failure("do s=$(gh api x) && echo $s", SkillDraftTests.guardTooComplex))
+        XCTAssertEqual(first, second, "the same lesson from two sessions")
+        XCTAssertEqual(first, "bash shell | this session is isolated in the worktree <path>")
+        XCTAssertEqual(LessonSignature.firstClause("no, it's here"), "no, it's here", "too short a clause to cut at")
+    }
+
+    func testSavedCandidatesAreRegroupedAndMerged() {
+        let one = UUID(), two = UUID()
+        var data = SkillsData()
+        // As Tim's skills.json had them, made by the 5a build.
+        var a = LessonCandidate(signature: "bash for id | this session is isolated in the worktree <path> but this command runs gh with th",
+                                summary: "Inline gh api --jq object construction is refused in a worktree session.",
+                                evidence: [LessonEvidence(sessionID: one, sessionName: "Roles -> Tags", kind: .failure, text: "a", at: Date(timeIntervalSince1970: 100))],
+                                remember: false, at: Date(timeIntervalSince1970: 100))
+        a.holdBack(more: 2)
+        let b = LessonCandidate(signature: "bash do s=$(gh | this session is isolated in the worktree <path> but this command is too complex",
+                                summary: "Complex shell constructs are refused in a worktree-isolated session.",
+                                evidence: [LessonEvidence(sessionID: two, sessionName: "Folder move highlight stuck", kind: .failure, text: "b", at: Date(timeIntervalSince1970: 200))],
+                                remember: false, at: Date(timeIntervalSince1970: 200))
+        data.candidates = [a, b]
+        XCTAssertTrue(data.regroupCandidates())
+        XCTAssertEqual(data.candidates.count, 1, "merged")
+        let merged = data.candidates[0]
+        XCTAssertEqual(merged.signature, "bash shell | this session is isolated in the worktree <path>")
+        XCTAssertEqual(merged.sessionCount, 2)
+        XCTAssertEqual(merged.evidence.count, 2)
+        XCTAssertEqual(merged.summary, "Complex shell constructs are refused in a worktree-isolated session.", "the newer words")
+        XCTAssertTrue(merged.qualifies, "two sessions now: drafted")
+        XCTAssertFalse(data.regroupCandidates(), "nothing more to do the next time")
     }
 }

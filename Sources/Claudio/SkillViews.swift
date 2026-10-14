@@ -185,6 +185,52 @@ private struct SkillProposalRow: View {
     }
 }
 
+/// LESSONS WAITING: lessons follow-ups found, gathering evidence until
+/// enough sessions show them (or you draft one now).
+private struct WaitingLessons: View {
+    @Environment(AppModel.self) private var model
+    let projectID: UUID
+
+    var body: some View {
+        let lessons = model.waitingLessons(inProject: projectID)
+        if !lessons.isEmpty {
+            Text("LESSONS WAITING · \(lessons.count)")
+                .font(DS.font(11, .extraBold)).kerning(0.66).foregroundStyle(DS.muted)
+                .padding(.top, 10)
+            ForEach(lessons) { lesson in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(lesson.summary).font(DS.font(12.5)).foregroundStyle(DS.text).fixedSize(horizontal: false, vertical: true)
+                    Text("Seen in \(lesson.sessionCount) session\(lesson.sessionCount == 1 ? "" : "s") · a skill is drafted at \(model.sessionsToDraft(lesson))")
+                        .font(DS.font(11)).foregroundStyle(DS.dim)
+                    if model.draftingCandidates.contains(lesson.id) {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small).tint(DS.blue)
+                            Text("Drafting a skill…").font(DS.font(11.5)).foregroundStyle(DS.muted)
+                        }
+                    } else {
+                        HStack(spacing: 8) {
+                            Button("Draft Now") { model.draftLessonNow(lesson.id, projectID: projectID) }
+                                .buttonStyle(OutlineButtonStyle())
+                                .font(DS.font(12))
+                                .help("One Claude call drafts a skill from it now, for you to approve.")
+                            LinkLabelButton(title: "Dismiss") { model.dismissLesson(lesson.id, projectID: projectID) }
+                                .font(DS.font(12))
+                                .help("Forget it. If it comes up again it starts afresh.")
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 5).fill(DS.input))
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(DS.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+            }
+            Text("Follow-ups find these. A skill is drafted once a lesson comes up in two sessions, or straight away if you asked Claude to remember it.")
+                .font(DS.font(11)).foregroundStyle(DS.dim).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
 /// A skill's `claudio-tags`, as the catalog's coloured chips; a name the
 /// catalog no longer has shows plainly.
 struct SkillTagChips: View {
@@ -385,6 +431,7 @@ struct SkillsListView: View {
                 ForEach(rows) { row in
                     SkillListRowView(row: row, projectID: projectID)
                 }
+                WaitingLessons(projectID: projectID)
                 Text("CLAUDIO skills are stored by Claudio, not in the repository, and every session Claudio starts in this project can use them. REPOSITORY skills are in .claude/skills, for anyone with the repository.")
                     .font(DS.font(11.5))
                     .foregroundStyle(DS.dim)

@@ -1646,4 +1646,53 @@ final class SkillTests: XCTestCase {
             XCTAssertEqual(f.model.unusedSkills(inProject: f.project).map(\.name), ["linux-tests"])
         }
     }
+
+    // MARK: - Lessons waiting (Tim's report, 2026-10-14)
+
+    func testWaitingLessonsAreShownAndCanBeDraftedOrDismissed() async throws {
+        let f = try await makeFixture()
+        await MainActor.run { f.model.commandExistsOverride = { _ in true } }
+        answerFollowUpsAndDrafts(f)
+        await followUp(f, session: f.session)
+        let lesson = try await MainActor.run { () -> LessonCandidate in
+            let waiting = f.model.waitingLessons(inProject: f.project)
+            XCTAssertEqual(waiting.count, 1, "found by the follow-up, and visible while it waits")
+            XCTAssertEqual(f.model.sessionsToDraft(waiting[0]), 2)
+            XCTAssertTrue(f.model.draftLessonNow(waiting[0].id, projectID: f.project))
+            return waiting[0]
+        }
+        await f.model.waitForSkillDrafts()
+        await MainActor.run {
+            XCTAssertEqual(f.model.skillProposals(inProject: f.project).count, 1, "Draft Now drafts it")
+            XCTAssertTrue(f.model.waitingLessons(inProject: f.project).isEmpty, "it has a draft now")
+            XCTAssertEqual(f.model.backgroundJobsToday, 0, "you asked for it")
+            f.model.dismissSkillProposal(f.model.skillProposals(inProject: f.project)[0].id, projectID: f.project)
+            XCTAssertEqual(f.model.waitingLessons(inProject: f.project).map(\.id), [lesson.id], "Not Now: back to waiting")
+            f.model.dismissLesson(lesson.id, projectID: f.project)
+            XCTAssertTrue(f.model.waitingLessons(inProject: f.project).isEmpty)
+            XCTAssertTrue(f.model.skillsData(inProject: f.project).candidates.isEmpty, "forgotten")
+        }
+    }
+
+    func testLessonsSavedByAnEarlierBuildAreRegroupedAtLaunch() async throws {
+        let assistant = MemoryAssistantStore()
+        let probe = try await makeFixture(assistant: assistant)
+        var data = SkillsData()
+        data.candidates = [
+            LessonCandidate(signature: "bash for id | this session is isolated in the worktree <path> but this command runs gh with th",
+                            summary: "a", evidence: [LessonEvidence(sessionID: UUID(), sessionName: "One", kind: .failure, text: "a", at: SkillTests.now)],
+                            remember: false, at: SkillTests.now),
+            LessonCandidate(signature: "bash do s=$(gh | this session is isolated in the worktree <path> but this command is too complex",
+                            summary: "b", evidence: [LessonEvidence(sessionID: UUID(), sessionName: "Two", kind: .failure, text: "b", at: SkillTests.now)],
+                            remember: false, at: SkillTests.now),
+        ]
+        await MainActor.run {
+            assistant.skillsData[probe.project] = data
+            probe.model.setAssistantMode(.manual, projectID: probe.project)
+            probe.model.loadSkillsData()
+            let saved = assistant.skillsData[probe.project]
+            XCTAssertEqual(saved?.candidates.count, 1, "merged and saved")
+            XCTAssertEqual(probe.model.skillOffers(inProject: probe.project).count, 1, "two sessions now: offered (Manual)")
+        }
+    }
 }

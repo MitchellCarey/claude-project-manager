@@ -102,6 +102,7 @@ What happens in other modes:
   - retired skills are greyed out
   - *(5a: Claudio's skills, each with "Used by n sessions · changed <age> ago"; REPOSITORY skills and retired ones come with 5b.)*
   - *(5b: REPOSITORY skills and retired ones (RETIRED, greyed out) are listed too. Each row shows its tags, and a tag no longer in Settings › Tags is flagged.)*
+  - *(Added from Tim's use: LESSONS WAITING lists lessons follow-ups found that haven't become skills yet, each with how many sessions showed it, Draft Now and Dismiss.)*
 - **Skill** (from Skills):
   - location tag
   - the skill text

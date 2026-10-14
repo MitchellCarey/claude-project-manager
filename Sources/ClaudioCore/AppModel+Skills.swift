@@ -30,6 +30,14 @@ extension AppModel {
                 data.reconcileProposals()
                 savedSkillsData[project.id] = data
                 if !data.isEmpty { skillsData[project.id] = data }
+                // Lessons an earlier build kept apart that now match: merged,
+                // saved, and drafted or offered if they now qualify.
+                var regrouped = data
+                if regrouped.regroupCandidates() {
+                    updateSkillsData(project.id) { $0 = regrouped }
+                    log.append(.info, "Assistant: regrouped the lessons waiting in \(project.name)")
+                    considerSkillCandidates(projectID: project.id)
+                }
                 if data.unreadableCount > 0 {
                     log.append(.error, "\(data.unreadableCount) of the assistant's skill entries for \(project.name) couldn't be read",
                                detail: "They're kept as they were.")

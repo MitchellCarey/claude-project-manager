@@ -80,6 +80,34 @@ extension AppModel {
         }
     }
 
+    // MARK: - Lessons waiting (Skills)
+
+    /// Lessons gathering evidence, newest first: shown in Skills, so one a
+    /// follow-up found doesn't seem to vanish while it waits for a second
+    /// session.
+    public func waitingLessons(inProject projectID: UUID) -> [LessonCandidate] {
+        skillsData(inProject: projectID).candidates.filter { $0.state == .collecting }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// How many sessions must show a lesson before a skill is drafted from it.
+    public func sessionsToDraft(_ candidate: LessonCandidate) -> Int {
+        max(LessonCandidate.sessionsToDraft, candidate.heldUntilSessions ?? 0)
+    }
+
+    /// Draft Now, on a waiting lesson: drafted straight away, as something
+    /// you asked for.
+    @discardableResult
+    public func draftLessonNow(_ id: UUID, projectID: UUID) -> Bool {
+        startSkillDraft(id, projectID: projectID, askedFor: true)
+    }
+
+    /// Dismiss, on a waiting lesson: forgotten. If it comes up again it
+    /// starts afresh.
+    public func dismissLesson(_ id: UUID, projectID: UUID) {
+        cancelHeldJob(key: .skillDraft(id))
+        updateSkillsData(projectID) { $0.candidates.removeAll { $0.id == id } }
+    }
+
     // MARK: - Offers (Manual)
 
     /// Draft Skill on an offer: runs now, as something you started.
