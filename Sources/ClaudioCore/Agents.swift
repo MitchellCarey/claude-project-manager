@@ -260,9 +260,13 @@ public struct AgentCommands: Sendable {
     }
 
     /// Restarts a background agent on the current Claude Code binary (see
-    /// `RespawnResult`). Its attached terminals end.
+    /// `RespawnResult`). Its attached terminals end. It takes about a
+    /// second; one `respawn --all` stayed running for 17 minutes after its
+    /// restarts were done, so it gets a short timeout.
     public func respawn(agentID: String) -> TerminalLaunch {
-        command(["respawn", agentID], in: home, login: false)
+        var launch = command(["respawn", agentID], in: home, login: false)
+        launch.timeout = 20
+        return launch
     }
 
     /// Deletes the agent, and its worktree when that is safe.

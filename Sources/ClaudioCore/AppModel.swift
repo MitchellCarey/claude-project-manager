@@ -162,6 +162,9 @@ public final class AppModel {
     /// Restarted sessions whose old terminal hadn't exited when the restart
     /// finished: its exit attaches the tab again.
     @ObservationIgnored private var reattachOnExit: Set<UUID> = []
+    /// Restarted sessions whose next notification check only takes a new
+    /// baseline: the restart isn't news.
+    @ObservationIgnored private var quietAfterRestart: Set<UUID> = []
     /// The roster file's modification date and size when it was last read.
     @ObservationIgnored private var rosterStamp: String?
     /// The newest agent version that made Claudio check the CLI again.
@@ -1590,13 +1593,23 @@ public final class AppModel {
         guard canRestartToUpdate(sessionID), let session = state.workspace.session(sessionID),
               let agentID = session.agentID, let commands = agentCommands(reportErrors: true) else { return }
         let wasAttached = running.contains(sessionID)
+        // While the agent is down it's listed without a process, which
+        // ends Awaiting Input; a question it ended on still stands after.
+        let waitingFor = session.status == .awaitingInput ? Optional(session.needsAction) : nil
         let from = agentVersions[agentID]
         restartingSessions.insert(sessionID)
         if wasAttached { reattachOnExit.insert(sessionID) }
         updateMenuFlags()
         enqueue {
             let result = await self.run(commands.respawn(agentID: agentID))
-            let outcome = RespawnResult.parse(exitCode: result.exitCode, output: result.output, errorOutput: result.errorOutput)
+            var outcome = RespawnResult.parse(exitCode: result.exitCode, output: result.output, errorOutput: result.errorOutput)
+            // A respawn that hung may still have restarted the agent: the
+            // agent list on the new version decides.
+            if result.timedOut {
+                await self.waitForRestartedAgent(sessionID)
+                outcome = self.outdatedVersion(of: sessionID) == nil && self.isAgentAlive(sessionID)
+                    ? .respawned(agentID: agentID) : .failed("claude respawn didn't finish")
+            }
             if case .respawned(let newID) = outcome {
                 if newID != agentID {
                     self.state.workspace.updateSession(sessionID) { $0.agentID = newID }
@@ -1605,6 +1618,10 @@ public final class AppModel {
                 let versions = [from.map { "from \($0)" }, self.environment.version.map { "to \($0)" }].compactMap { $0 }
                 self.log.append(.info, "Restarted “\(session.name)” on the installed Claude Code", detail: versions.joined(separator: " "))
                 await self.waitForRestartedAgent(sessionID)
+                if let waitingFor, self.state.workspace.session(sessionID)?.status == .completed {
+                    self.state.workspace.updateSession(sessionID) { $0.status = .awaitingInput; $0.needsAction = waitingFor }
+                    self.save()
+                }
             } else {
                 self.reattachOnExit.remove(sessionID)
                 if case .failed(let message) = outcome {
@@ -1615,6 +1632,7 @@ public final class AppModel {
                 await self.refreshAgents()
             }
             self.restartingSessions.remove(sessionID)
+            self.quietAfterRestart.insert(sessionID)
             // If the old terminal is still going, its exit attaches the tab.
             if wasAttached, !self.running.contains(sessionID) {
                 self.reattachOnExit.remove(sessionID)
@@ -2133,8 +2151,9 @@ public final class AppModel {
 
     /// Called by the UI when a session's terminal process exits.
     public func terminalExited(_ sessionID: UUID, exitCode: Int32?) {
-        // Closing its tab is a sign it may be ready for a follow-up.
-        followUpDue.insert(sessionID)
+        // Closing its tab is a sign it may be ready for a follow-up; a
+        // restart ending it isn't.
+        if !reattachOnExit.contains(sessionID) && !restartingSessions.contains(sessionID) { followUpDue.insert(sessionID) }
         running.remove(sessionID)
         runningDirectly.remove(sessionID)
         pendingLaunches[sessionID] = nil
@@ -2336,6 +2355,9 @@ public final class AppModel {
         guard let previous = notificationBaseline else { return }
         let settings = state.settings.notifications
         for session in state.workspace.sessions {
+            // A restart lists the agent without a process for a moment, while
+            // its task may still say "working": not a stop to report.
+            if restartingSessions.contains(session.id) || quietAfterRestart.remove(session.id) != nil { continue }
             guard let before = previous[session.id], let after = current[session.id], before != after else { continue }
             let kind: SessionNotification.Kind
             if stopsRequested.contains(session.id) {

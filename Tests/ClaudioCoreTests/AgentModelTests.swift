@@ -19,6 +19,7 @@ final class FakeRunner: CommandRunning, @unchecked Sendable {
     var respawnExit: Int32 = 0
     var respawnOutput = "respawned 7d1da24e\n"
     var respawnError = ""
+    var respawnTimedOut = false
     /// Runs while `claude respawn` is in progress.
     var duringRespawn: (@Sendable () async -> Void)?
     /// Runs while a `--bg` command is in progress, before it prints its id.
@@ -36,7 +37,8 @@ final class FakeRunner: CommandRunning, @unchecked Sendable {
         if args == ["auth", "status", "--json"] { return CommandResult(exitCode: authExit, output: authOutput, errorOutput: "") }
         if args.first == "respawn" {
             await duringRespawn?()
-            return CommandResult(exitCode: respawnExit, output: respawnExit == 0 ? respawnOutput : "", errorOutput: respawnError)
+            return CommandResult(exitCode: respawnExit, output: respawnExit == 0 ? respawnOutput : "", errorOutput: respawnError,
+                                 timedOut: respawnTimedOut)
         }
         if args.first == "stop" { return CommandResult(exitCode: stopExit, output: "", errorOutput: stopExit == 0 ? "" : "No such agent.") }
         if args.contains("/usage") { return CommandResult(exitCode: 0, output: usageOutput, errorOutput: "") }
