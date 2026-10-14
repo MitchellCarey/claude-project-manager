@@ -8,6 +8,8 @@ final class RestartToUpdateTests: XCTestCase {
     let repo = "/code/proj"
     let sessionID = UUID(uuidString: "D2135F55-2ABA-41C4-813D-26E0A5C6CFDE")!
     let conversation = "7d1da24e-122c-4b28-9495-195c4593ed3e"
+    let secondID = UUID(uuidString: "6F2D27ED-0B1C-4E0A-9C55-3A2F4A1B7C10")!
+    let secondConversation = "fb72709a-291a-41a1-ab00-ed7fe2d9115b"
     var runner = FakeRunner()
     var store = MemoryStore()
     var terminals: FakeTerminals!
@@ -36,7 +38,8 @@ final class RestartToUpdateTests: XCTestCase {
 
     @MainActor
     private func makeModel(name: String = "Project Assistant Import", backgroundTasks: [BackgroundTask] = [],
-                           status: SessionStatus = .completed, needsAction: String? = nil) throws -> AppModel {
+                           status: SessionStatus = .completed, needsAction: String? = nil,
+                           second: Bool = false) throws -> AppModel {
         home = try makeTemporaryDirectory()
         hooks = try makeTemporaryDirectory().appendingPathComponent("hooks.log")
         try Data().write(to: hooks)
@@ -48,6 +51,12 @@ final class RestartToUpdateTests: XCTestCase {
         session.agentID = "7d1da24e"
         session.backgroundTasks = backgroundTasks
         try state.workspace.addSession(session)
+        if second {
+            var other = Session(id: secondID, projectID: p, claudeSessionID: secondConversation, hasConversation: true,
+                                name: "Websocket Close State", workingDirectory: repo, status: .completed)
+            other.agentID = "fb72709a"
+            try state.workspace.addSession(other)
+        }
         store.state = state
         try writeRoster()
         let model = AppModel(store: store, discovery: SessionDiscovery(claudeHome: home), hookEventsURL: hooks, runner: runner,
@@ -60,9 +69,10 @@ final class RestartToUpdateTests: XCTestCase {
 
     /// Checks the CLI (2.1.296) and lists the agent, which runs 2.1.284.
     private func readyModel(name: String = "Project Assistant Import", backgroundTasks: [BackgroundTask] = [],
-                            status: SessionStatus = .completed, needsAction: String? = nil) async throws -> AppModel {
+                            status: SessionStatus = .completed, needsAction: String? = nil,
+                            second: Bool = false) async throws -> AppModel {
         let model = try await MainActor.run {
-            try makeModel(name: name, backgroundTasks: backgroundTasks, status: status, needsAction: needsAction)
+            try makeModel(name: name, backgroundTasks: backgroundTasks, status: status, needsAction: needsAction, second: second)
         }
         await model.checkEnvironment(force: true)
         await model.refreshAgents()
@@ -95,6 +105,9 @@ final class RestartToUpdateTests: XCTestCase {
                                            errorOutput: "1cc21cfa: still running — couldn't confirm restart, retry in a moment\n"),
                        .stillRunning)
         XCTAssertEqual(RespawnResult.parse(exitCode: 1, output: "", errorOutput: ""), .failed("exit 1"))
+        XCTAssertEqual(RespawnResult.parse(exitCode: 0, output: "", errorOutput: ""), .failed("claude respawn didn't say it restarted"))
+        XCTAssertEqual(RespawnResult.parse(exitCode: 0, output: "restarting 1cc21cfa\n", errorOutput: ""),
+                       .failed("claude respawn didn't say it restarted (restarting 1cc21cfa)"))
     }
 
     func testRespawnCommand() {
@@ -145,6 +158,46 @@ final class RestartToUpdateTests: XCTestCase {
         }
         await model.lastTask?.value
         XCTAssertEqual(respawnCommands(), [])
+    }
+
+    /// An agent at a permission prompt is listed `status: "waiting"`.
+    func testAnAgentWaitingForAnAnswerSaysSo() async throws {
+        runner.agentsJSON = agentJSON(status: "waiting")
+        let model = try await readyModel()
+        await MainActor.run { XCTAssertEqual(model.restartBlocker(sessionID), "It's waiting for your answer") }
+    }
+
+    func testASessionWithoutAnAgentIsntRestarted() async throws {
+        let model = try await readyModel()
+        await MainActor.run {
+            XCTAssertEqual(model.restartBlocker(UUID()), "Not a background agent")
+        }
+    }
+
+    /// Most installs have no roster until a background agent has run.
+    func testNoRosterMeansNothingIsOutdated() async throws {
+        let model = try await MainActor.run { try makeModel() }
+        try FileManager.default.removeItem(at: rosterURL)
+        await model.checkEnvironment(force: true)
+        await model.refreshAgents()
+        await MainActor.run {
+            XCTAssertEqual(model.agentVersions, [:])
+            XCTAssertEqual(model.outdatedSessionIDs, [])
+            model.updateMenuFlags()
+            XCTAssertEqual(model.menuFlags.restartableCount, 0)
+            XCTAssertFalse(model.log.entries.contains { $0.title == "Couldn't read Claude Code's agent roster" })
+        }
+    }
+
+    /// A roster read mid-write keeps the versions read before, and says so.
+    func testAnUnreadableRosterKeepsTheLastVersions() async throws {
+        let model = try await readyModel()
+        try Data("{\"workers\":".utf8).write(to: rosterURL)
+        await model.refreshAgents()
+        await MainActor.run {
+            XCTAssertEqual(model.outdatedVersion(of: sessionID), ClaudeVersion(2, 1, 284))
+            XCTAssertTrue(model.log.entries.contains { $0.title == "Couldn't read Claude Code's agent roster" })
+        }
     }
 
     func testRunningBackgroundTasksWait() async throws {
@@ -267,12 +320,87 @@ final class RestartToUpdateTests: XCTestCase {
     }
 
     func testRestartAllRestartsEachIdleOutdatedSession() async throws {
-        let model = try await readyModel()
+        let both = String(agentJSON(status: "idle").dropLast()) + "," + String(agentJSON(status: "idle")
+            .replacingOccurrences(of: "7d1da24e-122c-4b28-9495-195c4593ed3e", with: secondConversation)
+            .replacingOccurrences(of: "7d1da24e", with: "fb72709a")
+            .replacingOccurrences(of: "Project Assistant Import", with: "Websocket Close State").dropFirst())
+        runner.agentsJSON = both
+        let model = try await readyModel(second: true)
         let roster = rosterURL
-        runner.duringRespawn = { try! Data(#"{"workers":{"7d1da24e":{"cliVersion":"2.1.296"}}}"#.utf8).write(to: roster) }
-        await MainActor.run { model.restartAllToUpdate() }
+        runner.duringRespawn = {
+            try! Data(#"{"workers":{"7d1da24e":{"cliVersion":"2.1.296"},"fb72709a":{"cliVersion":"2.1.296"}}}"#.utf8).write(to: roster)
+        }
+        await MainActor.run {
+            XCTAssertEqual(Set(model.outdatedSessionIDs), [sessionID, secondID])
+            model.restartAllToUpdate()
+            XCTAssertEqual(model.restartingSessions, [sessionID, secondID])
+        }
         await model.lastTask?.value
-        XCTAssertEqual(respawnCommands(), [["respawn", "7d1da24e"]])
+        XCTAssertEqual(Set(respawnCommands()), [["respawn", "7d1da24e"], ["respawn", "fb72709a"]])
+        await MainActor.run {
+            XCTAssertEqual(model.outdatedSessionIDs, [])
+            XCTAssertTrue(model.restartingSessions.isEmpty)
+        }
+    }
+
+    /// Stopping a session mid-restart: neither reattach path brings its tab
+    /// back, whichever comes first, the restart or the old terminal's exit.
+    func testStoppingMidRestartDoesntAttachAgain() async throws {
+        for exitFirst in [false, true] {
+            runner = FakeRunner()
+            runner.versionOutput = "2.1.296 (Claude Code)\n"
+            runner.agentsJSON = agentJSON(status: "idle")
+            let model = try await readyModel()
+            let (runner, roster, id) = (runner, rosterURL, sessionID)
+            runner.duringRespawn = {
+                await MainActor.run {
+                    model.stop(id)
+                    if exitFirst { model.terminalExited(id, exitCode: 0) }
+                }
+                try! Data(#"{"workers":{"7d1da24e":{"cliVersion":"2.1.296"}}}"#.utf8).write(to: roster)
+            }
+            await MainActor.run {
+                model.resume(id)
+                _ = model.takePendingLaunch(id)
+                model.restartToUpdate(id)
+            }
+            await model.lastTask?.value
+            await MainActor.run {
+                if !exitFirst { model.terminalExited(id, exitCode: 0) }
+                XCTAssertNil(model.takePendingLaunch(id), "exit first: \(exitFirst)")
+                XCTAssertFalse(model.isRunning(id), "exit first: \(exitFirst)")
+            }
+            XCTAssertTrue(runner.commands.contains(["stop", "7d1da24e"]))
+        }
+    }
+
+    /// A restart that fails because the agent really went: the stop is
+    /// still reported (compared with the baseline from before the restart).
+    func testAnAgentThatWentDuringAFailedRestartIsReported() async throws {
+        runner.respawnExit = 1
+        runner.respawnError = "No job matching '7d1da24e'\n"
+        let model = try await readyModel()
+        let notifier = await MainActor.run { FakeNotifier() }
+        let (runner, gone) = (runner,
+            #"[{"id":"7d1da24e","cwd":"/code/proj","kind":"background","sessionId":"\#(conversation)","state":"working"}]"#)
+        await MainActor.run {
+            var settings = model.settings
+            settings.notifications.stoppedUnexpectedly = true
+            model.updateSettings(settings)
+            model.notifier = notifier
+            model.checkNotifications()
+        }
+        runner.duringRespawn = {
+            runner.agentsJSON = gone
+            await model.refreshAgents()
+            await MainActor.run { model.checkNotifications() }
+        }
+        await MainActor.run { model.restartToUpdate(sessionID) }
+        await model.lastTask?.value
+        await MainActor.run {
+            model.checkNotifications()
+            XCTAssertEqual(notifier.posted.map(\.title), ["Project Assistant Import stopped unexpectedly"])
+        }
     }
 
     /// A respawn that hangs is cut off; the agent list decides whether it

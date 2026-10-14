@@ -43,6 +43,10 @@ public enum RespawnResult: Equatable, Sendable {
         }
         let message = [errorOutput, output].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
         if message?.contains("still running") == true { return .stillRunning }
+        if exitCode == 0 {
+            // It succeeded but didn't say "respawned": a CLI whose output changed.
+            return .failed("claude respawn didn't say it restarted" + (message.map { " (\($0))" } ?? ""))
+        }
         return .failed(message ?? "exit \(exitCode)")
     }
 }

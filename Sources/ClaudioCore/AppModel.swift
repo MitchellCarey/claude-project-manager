@@ -1571,6 +1571,7 @@ public final class AppModel {
         if restartingSessions.contains(sessionID) { return "Restarting…" }
         if isStopping(sessionID) { return "Stopping" }
         if !session.backgroundTasks.isEmpty { return "Background tasks are still running" }
+        if agents[agentID]?.status == "waiting" { return "It's waiting for your answer" }
         if session.status == .working || agents[agentID]?.status != "idle" { return "Wait until it's idle" }
         return nil
     }
@@ -1605,8 +1606,10 @@ public final class AppModel {
             var outcome = RespawnResult.parse(exitCode: result.exitCode, output: result.output, errorOutput: result.errorOutput)
             // A respawn that hung may still have restarted the agent: the
             // agent list on the new version decides.
+            var waited = false
             if result.timedOut {
                 await self.waitForRestartedAgent(sessionID)
+                waited = true
                 outcome = self.outdatedVersion(of: sessionID) == nil && self.isAgentAlive(sessionID)
                     ? .respawned(agentID: agentID) : .failed("claude respawn didn't finish")
             }
@@ -1617,7 +1620,7 @@ public final class AppModel {
                 }
                 let versions = [from.map { "from \($0)" }, self.environment.version.map { "to \($0)" }].compactMap { $0 }
                 self.log.append(.info, "Restarted “\(session.name)” on the installed Claude Code", detail: versions.joined(separator: " "))
-                await self.waitForRestartedAgent(sessionID)
+                if !waited { await self.waitForRestartedAgent(sessionID) }
                 if let waitingFor, self.state.workspace.session(sessionID)?.status == .completed {
                     self.state.workspace.updateSession(sessionID) { $0.status = .awaitingInput; $0.needsAction = waitingFor }
                     self.save()
@@ -1632,14 +1635,24 @@ public final class AppModel {
                 await self.refreshAgents()
             }
             self.restartingSessions.remove(sessionID)
-            self.quietAfterRestart.insert(sessionID)
+            // Only a restart that happened explains the gap. After a failed
+            // one, the next check compares with the baseline from before it
+            // (kept while it ran), so an agent that really went is reported.
+            if case .respawned = outcome { self.quietAfterRestart.insert(sessionID) }
             // If the old terminal is still going, its exit attaches the tab.
             if wasAttached, !self.running.contains(sessionID) {
                 self.reattachOnExit.remove(sessionID)
-                if self.isAgentAlive(sessionID) { self.attach(sessionID) }
+                self.reattachAfterRestart(sessionID)
             }
             self.updateMenuFlags()
         }
+    }
+
+    /// Attaches a restarted session's tab again, unless it was stopped
+    /// meanwhile: a stop closes the tab before its agent has gone.
+    private func reattachAfterRestart(_ sessionID: UUID) {
+        guard isAgentAlive(sessionID), !isStopping(sessionID) else { return }
+        attach(sessionID)
     }
 
     /// Every outdated session that can be restarted now, one after another.
@@ -1670,7 +1683,23 @@ public final class AppModel {
         }
         guard stamp != rosterStamp else { return }
         rosterStamp = stamp
-        let versions = (try? Data(contentsOf: url)).flatMap(DaemonRoster.versions) ?? [:]
+        let versions: [String: ClaudeVersion]
+        if attributes == nil {
+            // No daemon has run yet, or it's a CLI without one.
+            versions = [:]
+        } else {
+            do {
+                guard let read = DaemonRoster.versions(try Data(contentsOf: url)) else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                versions = read
+            } catch {
+                // Possibly read mid-write: keep the last versions. The file
+                // changes again when it's written, and is read then.
+                log.append(.error, "Couldn't read Claude Code's agent roster", detail: "\(url.path): \(error.localizedDescription)")
+                return
+            }
+        }
         if versions != agentVersions { agentVersions = versions }
         if let newest = versions.values.max(), let current = environment.version, current < newest,
            recheckedForVersion.map({ $0 < newest }) ?? true {
@@ -2164,8 +2193,8 @@ public final class AppModel {
         // the restart attaches the tab when it's done.
         if reattachOnExit.contains(sessionID), !restartingSessions.contains(sessionID) {
             reattachOnExit.remove(sessionID)
-            attach(sessionID)
-            return
+            reattachAfterRestart(sessionID)
+            if running.contains(sessionID) { return }
         }
         if state.workspace.session(sessionID)?.agentID != nil {
             // Only the attach client ended; the agent's own state decides.
@@ -2182,6 +2211,8 @@ public final class AppModel {
     /// Stops the session: its background agent (`claude stop`) or its process.
     public func stop(_ sessionID: UUID) {
         followUpDue.insert(sessionID)
+        // A restart in progress doesn't attach the tab again.
+        reattachOnExit.remove(sessionID)
         detach(sessionID)
         if let agentID = state.workspace.session(sessionID)?.agentID {
             if isAgentAlive(sessionID) { stopsRequested.insert(sessionID) }
@@ -2347,10 +2378,12 @@ public final class AppModel {
     /// agent that exited before its task was done, unless you stopped it. The
     /// first check only records a baseline.
     public func checkNotifications() {
-        let current = Dictionary(uniqueKeysWithValues: state.workspace.sessions.map {
+        var current = Dictionary(uniqueKeysWithValues: state.workspace.sessions.map {
             ($0.id, NotificationBaseline(status: $0.status, agentAlive: isAgentAlive($0.id),
                                          taskUnfinished: $0.agentID.flatMap { agents[$0]?.state } == "working"))
         })
+        // A restarting session keeps its baseline from before the restart.
+        for id in restartingSessions { if let kept = notificationBaseline?[id] { current[id] = kept } }
         defer { notificationBaseline = current }
         guard let previous = notificationBaseline else { return }
         let settings = state.settings.notifications
