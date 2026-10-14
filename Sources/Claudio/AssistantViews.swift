@@ -245,17 +245,13 @@ private struct NotesList: View {
         } else {
             legend
             ScrollView {
-                // Ages refresh, and new notes lose their highlight, as time passes.
-                TimelineView(.periodic(from: .now, by: 15)) { context in
-                    LazyVStack(spacing: 6) {
-                        ForEach(notes) { note in
-                            NoteCard(note: note, projectID: projectID,
-                                     isFresh: context.date.timeIntervalSince(note.createdAt) < NoteCard.freshInterval)
-                        }
+                LazyVStack(spacing: 6) {
+                    ForEach(notes) { note in
+                        TimedNoteCard(note: note, projectID: projectID)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 12)
                 }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 12)
             }
             .scrollIndicators(.automatic)
         }
@@ -278,6 +274,23 @@ private struct NotesList: View {
     }
 }
 
+/// A note card whose age and highlight refresh as time passes. The timeline
+/// is per card: wrapped around a whole list it rebuilt every card on each
+/// tick (the lazy notes list hung while scrolling).
+struct TimedNoteCard: View {
+    let note: ProjectNote
+    let projectID: UUID
+    var showsItemChip = true
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { context in
+            NoteCard(note: note, projectID: projectID,
+                     isFresh: context.date.timeIntervalSince(note.createdAt) < NoteCard.freshInterval,
+                     showsItemChip: showsItemChip)
+        }
+    }
+}
+
 /// One note: its text, then who wrote it, where and when, with Promote…
 /// (no plan item yet) and Undo (notes you didn't write). Its plan item
 /// shows as a chip, and the assistant's suggestion under it. Right-click to
@@ -297,11 +310,14 @@ struct NoteCard: View {
         let item: PlanItem? = if case .item(let item) = attached { item } else { nil }
         let suggestion = model.noteSuggestions[note.id]
         VStack(alignment: .leading, spacing: 6) {
+            // No fixedSize(vertical:) here: the scroll view already gives the
+            // text its full height, and in a lazy stack ideal-size modifiers
+            // can make estimated and measured heights disagree, which fed the
+            // scroll-offset loop that hung the notes list.
             Text(note.text)
                 .font(DS.font(13))
                 .foregroundStyle(DS.text)
                 .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // Room for the ⋯ menu in the corner.
