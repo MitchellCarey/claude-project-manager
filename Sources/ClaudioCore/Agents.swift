@@ -259,6 +259,12 @@ public struct AgentCommands: Sendable {
         command(["stop", agentID], in: home, login: false)
     }
 
+    /// Restarts a background agent on the current Claude Code binary (see
+    /// `RespawnResult`). Its attached terminals end.
+    public func respawn(agentID: String) -> TerminalLaunch {
+        command(["respawn", agentID], in: home, login: false)
+    }
+
     /// Deletes the agent, and its worktree when that is safe.
     public func remove(agentID: String) -> TerminalLaunch {
         command(["rm", agentID], in: home, login: false)
