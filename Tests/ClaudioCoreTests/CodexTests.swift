@@ -194,9 +194,13 @@ final class CodexTests: XCTestCase {
             model.pollHookEvents()
             XCTAssertEqual(model.workspace.session(id)?.codexSessionID, threadID)
             model.terminalExited(id, exitCode: 0)
+            // A crash, or a state saved before stopping, can retain a wait.
+            store.state.workspace.updateSession(id) { $0.status = .awaitingInput; $0.needsAction = "Old approval" }
             let restored = AppModel(store: store, discovery: SessionDiscovery(claudeHome: directory),
                                     hookEventsURL: directory.appendingPathComponent("hooks.log"), runner: FakeRunner(),
                                     locateClaude: { _ in nil }, locateCodex: { _ in "/tools/codex" }, locateGitHubCLI: { nil })
+            XCTAssertEqual(restored.workspace.session(id)?.status, .completed)
+            XCTAssertNil(restored.workspace.session(id)?.needsAction)
             restored.resume(id)
             XCTAssertEqual(Array(try XCTUnwrap(restored.takePendingLaunch(id)).claudeArguments.prefix(2)), ["resume", threadID])
         }

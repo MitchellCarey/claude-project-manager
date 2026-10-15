@@ -1655,6 +1655,16 @@ public final class AppModel {
     private func restoreBackgroundTasks() {
         let launchedAt = now()
         for session in state.workspace.sessions {
+            // Codex uses --no-daemon: no terminal survives an app restart,
+            // including one that was waiting at an approval or trust prompt.
+            if session.provider == .codex {
+                state.workspace.updateSession(session.id) {
+                    $0.status = .completed
+                    $0.needsAction = nil
+                    $0.forgetBackgroundTasks()
+                }
+                continue
+            }
             var tasks: [BackgroundTask] = []
             if let agentID = session.agentID {
                 let url = BackgroundJobState.url(claudeHome: discovery.claudeHome, agentID: agentID)
