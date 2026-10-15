@@ -14,7 +14,7 @@ The UI follows the Claude Design handoff in [`design/`](design/). It combines th
 
 ## Features
 
-  * Choose **Claude Code** or **Codex CLI** in New Session. Each session keeps its provider across app restarts. Settings → New Sessions has a default CLI, separate executable and model settings for Codex, and Codex sandbox choices. Existing saved sessions remain Claude Code sessions.
+  * Choose **Claude Code** or **Codex CLI** in New Session. Each session keeps its provider across app restarts. Settings → New Sessions has a default CLI, separate executable and model settings for Codex, and Codex sandbox choices. New Session and Codex settings use the setup popup's compact app-icon header and flat grouped rows. Existing saved sessions remain Claude Code sessions.
 - **Two rails** (design 8c, like PyCharm). Every control lives where its scope lives, and the side a tool is on tells you what it covers:
   - The **left rail** holds project tools: **Sessions** (the sidebar tree, ⌘1), **Pull Requests** (⌘2), the **Assistant** (⌘3) and **Usage** (⌘4), with the **Shell** at its foot (⌃`; a badge counts hidden shells).
   - The **right rail** holds tools for the selected session: **Changes** (⌥⌘F, with a badge counting its files), **Pull Request** (⌥⌘P) and **Usage** (⌥⌘U). Both follow the focused tab. It shows only while a session's tab is selected; with an overview tab, or no tabs, it's hidden, and an open tool comes back with the next session.

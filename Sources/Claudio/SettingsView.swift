@@ -70,13 +70,17 @@ struct SettingsView: View {
             Rectangle().fill(Color.black.opacity(0.35)).frame(width: 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    SettingsHero(title: pane.title, subtitle: pane.subtitle, symbol: pane.symbol, tint: pane.tint)
+                    if pane == .sessions {
+                        SetupHeader(title: pane.title, subtitle: pane.subtitle)
+                    } else {
+                        SettingsHero(title: pane.title, subtitle: pane.subtitle, symbol: pane.symbol, tint: pane.tint)
+                    }
                     page
                 }
                 .padding(24)
             }
             .frame(maxWidth: .infinity)
-            .background(DS.window)
+            .background(pane == .sessions ? DS.sidebar : DS.window)
             .id(pane)
         }
         .frame(width: 780, height: 600)
@@ -296,8 +300,8 @@ private struct SessionSettings: View {
     var body: some View {
         let background = settingBinding(model, \.useBackgroundAgents)
 
-        SettingsGroup(title: "CLI") {
-            SettingsRow(title: "Default CLI", subtitle: "Existing sessions keep their original CLI.") {
+        SetupSection {
+            SetupFormRow(title: "Default CLI", symbol: "terminal", subtitle: "Existing sessions keep their original CLI.", showsSeparator: false) {
                 Picker("Default CLI", selection: settingBinding(model, \.defaultProvider)) {
                     ForEach(SessionProvider.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
@@ -306,18 +310,20 @@ private struct SessionSettings: View {
             }
         }
 
-        SettingsGroup(title: "Codex CLI", footer: "Codex runs directly in its tab. Use /hooks in Codex to review Claudio's tracking hooks. Claude background agents, Assistant and plan usage remain Claude Code features.") {
-            SettingsRow(title: "Executable", subtitle: "Leave empty to detect Codex on PATH, in ~/.local/bin or Homebrew.") {
+        SetupSection(title: "Codex CLI", footer: "Codex runs directly in its tab. Use /hooks in Codex to review Claudio's tracking hooks. Claude background agents, Assistant and plan usage remain Claude Code features.") {
+            SetupFormRow(title: "Executable", symbol: "terminal", subtitle: "Leave empty to detect Codex on PATH, in ~/.local/bin or Homebrew.") {
                 TextField("Detect automatically", text: optionalText(\.codexPath))
+                    .accessibilityLabel("Codex executable")
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 230)
             }
-            SettingsRow(title: "Model", subtitle: "Optional model ID; empty uses your Codex configuration.") {
+            SetupFormRow(title: "Model", symbol: "cpu", subtitle: "Optional model ID; empty uses your Codex configuration.") {
                 TextField("Codex default", text: optionalText(\.defaultCodexModel))
+                    .accessibilityLabel("Default Codex model")
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 230)
             }
-            SettingsRow(title: "Permissions", showsSeparator: false) {
+            SetupFormRow(title: "Permissions", symbol: "lock.shield", showsSeparator: false) {
                 Picker("Codex Permissions", selection: settingBinding(model, \.defaultCodexPermissions)) {
                     ForEach(CodexPermissions.allCases, id: \.self) { Text($0.label).tag($0) }
                 }

@@ -35,33 +35,30 @@ struct NewSessionSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("New Session")
-                .font(DS.font(18, .bold))
-                .foregroundStyle(DS.text)
+            SetupHeader(title: "New Session", subtitle: "Choose a CLI and a project for this session.")
 
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 12) {
-                GridRow {
-                    label("CLI")
+            SetupSection {
+                SetupFormRow(title: "CLI", symbol: "terminal") {
                     Picker("CLI", selection: $provider) {
                         ForEach(SessionProvider.allCases, id: \.self) { Text($0.label).tag($0) }
                     }
                     .labelsHidden()
+                    .frame(width: 320)
                 }
-                GridRow {
-                    label("Project")
-                    Picker("", selection: $projectID) {
+                SetupFormRow(title: "Project", symbol: "folder.fill") {
+                    Picker("Project", selection: $projectID) {
                         ForEach(model.workspace.projects) { project in
                             Text(project.name).tag(Optional(project.id))
                         }
                     }
                     .labelsHidden()
+                    .frame(width: 320)
                     .onChange(of: projectID) { _, _ in
                         if let folderID, model.workspace.projectID(containingFolder: folderID) != projectID { self.folderID = nil }
                     }
                 }
-                GridRow {
-                    label("Folder")
-                    Picker("", selection: $folderID) {
+                SetupFormRow(title: "Folder", symbol: "folder") {
+                    Picker("Folder", selection: $folderID) {
                         Text(Workspace.unfiledName).tag(UUID?.none)
                         ForEach(folders, id: \.folder.id) { entry in
                             // A flat picker, so the full path disambiguates same-named folders at different levels.
@@ -69,20 +66,21 @@ struct NewSessionSheet: View {
                         }
                     }
                     .labelsHidden()
+                    .frame(width: 320)
                     .onChange(of: folderID) { _, newFolderID in
                         if !tagsEdited { tagIDs = Set(model.suggestedTags(name: name, folderID: newFolderID)) }
                     }
                 }
-                GridRow {
-                    label("Name")
-                    TextField("e.g. pr review inline 1427 (defaults to the prompt)", text: $name)
+                SetupFormRow(title: "Name", symbol: "text.cursor") {
+                    TextField("Defaults to the prompt", text: $name)
+                        .accessibilityLabel("Session name")
                         .textFieldStyle(.roundedBorder)
+                        .frame(width: 320)
                         .onChange(of: name) { _, value in
                             if !tagsEdited { tagIDs = Set(model.suggestedTags(name: value, folderID: folderID)) }
                         }
                 }
-                GridRow {
-                    label("Tags")
+                SetupFormRow(title: "Tags", symbol: "tag") {
                     WrappingHStack(spacing: 6) {
                         ForEach(model.settings.tags) { tag in
                             TagToggleChip(tag: tag, isOn: tagIDs.contains(tag.id)) {
@@ -91,64 +89,74 @@ struct NewSessionSheet: View {
                             }
                         }
                     }
+                    .frame(width: 320, alignment: .leading)
                     .help("Labels for the session's tab. Edit the list in Settings.")
                 }
-                GridRow {
-                    label("Model")
-                    if provider == .codex {
-                        TextField("Codex default", text: $codexModel)
-                            .textFieldStyle(.roundedBorder)
-                            .help("Optional model ID. Leave empty to use your Codex configuration.")
-                    } else {
-                        Picker("", selection: $modelID) {
-                            ForEach(ModelChoices.all, id: \.label) { choice in
-                                Text(choice.label).tag(choice.id)
+                SetupFormRow(title: "Model", symbol: "cpu") {
+                    Group {
+                        if provider == .codex {
+                            TextField("Codex default", text: $codexModel)
+                                .accessibilityLabel("Codex model")
+                                .textFieldStyle(.roundedBorder)
+                                .help("Optional model ID. Leave empty to use your Codex configuration.")
+                        } else {
+                            Picker("Model", selection: $modelID) {
+                                ForEach(ModelChoices.all, id: \.label) { choice in
+                                    Text(choice.label).tag(choice.id)
+                                }
                             }
+                            .labelsHidden()
                         }
-                        .labelsHidden()
                     }
+                    .frame(width: 320)
                 }
                 if backgroundMode {
-                    GridRow {
-                        label("Worktree")
+                    SetupFormRow(title: "Worktree", symbol: "arrow.triangle.branch") {
                         Toggle("Run in its own git worktree", isOn: $useWorktree)
                             .disabled(!isGitProject)
                             .help(isGitProject
                                   ? "The agent makes a worktree in .claude/worktrees before its first edit, so sessions don't conflict, and commits its work there. Off: it edits the project's checkout."
                                   : "This project isn't a git repository")
+                            .frame(width: 320, alignment: .leading)
                     }
                 }
-                GridRow {
-                    label("Permissions")
-                    if provider == .codex {
-                        Picker("Permissions", selection: $codexPermissions) {
-                            ForEach(CodexPermissions.allCases, id: \.self) { Text($0.label).tag($0) }
+                SetupFormRow(title: "Permissions", symbol: "lock.shield", showsSeparator: false) {
+                    Group {
+                        if provider == .codex {
+                            Picker("Permissions", selection: $codexPermissions) {
+                                ForEach(CodexPermissions.allCases, id: \.self) { Text($0.label).tag($0) }
+                            }
+                            .labelsHidden()
+                        } else {
+                            Picker("Permissions", selection: Binding(get: { permissionMode }, set: { permissionMode = $0; permissionEdited = true })) {
+                                ForEach(PermissionMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                            }
+                            .labelsHidden()
                         }
-                        .labelsHidden()
-                    } else {
-                        Picker("", selection: Binding(get: { permissionMode }, set: { permissionMode = $0; permissionEdited = true })) {
-                            ForEach(PermissionMode.allCases, id: \.self) { Text($0.label).tag($0) }
-                        }
-                        .labelsHidden()
                     }
+                    .frame(width: 320)
                 }
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                label("Initial prompt")
+                Text("Initial prompt")
+                    .font(DS.font(13.5, .semibold))
+                    .foregroundStyle(DS.text)
                 TextEditor(text: $prompt)
+                    .accessibilityLabel("Initial prompt")
                     .font(DS.mono(13))
                     .scrollContentBackground(.hidden)
                     .padding(6)
-                    .frame(minHeight: 120)
-                    .fieldChrome()
+                    .frame(height: 90)
+                    .fieldChrome(background: DS.window)
                 Text(provider == .codex
                      ? "Opens Codex CLI in this project. Sign in in the terminal if prompted. Use /hooks to review and trust Claudio's session tracking hooks."
                      : backgroundMode
                      ? "Starts a Claude Code background agent and attaches to it. Leave the prompt empty to open a plain terminal session instead."
                      : "Opens Claude Code in a terminal in the project directory. Optional: leave empty to start with a blank prompt.")
                     .font(DS.font(11.5))
-                    .foregroundStyle(DS.dim)
+                    .foregroundStyle(DS.muted)
+                    .fixedSize(horizontal: false, vertical: true)
                 if provider == .codex, let reason = model.codexUnavailableReason {
                     Text(reason).font(DS.font(11.5)).foregroundStyle(DS.red)
                 }
@@ -159,11 +167,12 @@ struct NewSessionSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Start Session", action: create)
-                    .buttonStyle(PrimaryButtonStyle(horizontalPadding: 14, verticalPadding: 5))
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canCreate)
                     .help("Start Session (Return, or ⌘Return from the prompt)")
             }
+            .controlSize(.small)
         }
         // Return adds a line in the prompt editor, so ⌘Return starts the session from anywhere
         // in the sheet. A button takes only one shortcut, hence this invisible second one.
@@ -175,7 +184,7 @@ struct NewSessionSheet: View {
                 .accessibilityHidden(true)
         }
         .padding(24)
-        .frame(width: 520)
+        .frame(width: 640)
         .background(DS.sidebar)
         .preferredColorScheme(.dark)
         .onAppear(perform: applyDefaults)
@@ -198,13 +207,6 @@ struct NewSessionSheet: View {
 
     private var folders: [(folder: Folder, depth: Int)] {
         projectID.map { model.workspace.foldersInDisplayOrder(projectID: $0) } ?? []
-    }
-
-    private func label(_ text: String) -> some View {
-        Text(text)
-            .font(DS.font(12, .bold))
-            .foregroundStyle(DS.muted)
-            .gridColumnAlignment(.trailing)
     }
 
     private func applyDefaults() {
