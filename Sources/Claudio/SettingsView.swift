@@ -26,7 +26,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .general: return "Claude Code's setup, which sessions the sidebar shows, and where Claudio keeps its data."
+        case .general: return "Claude Code's setup, which sessions the sidebar shows, and where Claudio keeps its data. Codex settings are in New Sessions."
         case .sessions: return "How new sessions start: as background agents or directly, with which model and permissions."
         case .notifications: return "Choose which session changes tap you on the shoulder."
         case .tags: return "Coloured labels for sessions, offered when you create one and shown on tabs."
@@ -296,7 +296,37 @@ private struct SessionSettings: View {
     var body: some View {
         let background = settingBinding(model, \.useBackgroundAgents)
 
-        SettingsGroup(title: "Session Mode") {
+        SettingsGroup(title: "CLI") {
+            SettingsRow(title: "Default CLI", subtitle: "Existing sessions keep their original CLI.") {
+                Picker("Default CLI", selection: settingBinding(model, \.defaultProvider)) {
+                    ForEach(SessionProvider.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .frame(width: 200)
+            }
+        }
+
+        SettingsGroup(title: "Codex CLI", footer: "Codex runs directly in its tab. Use /hooks in Codex to review Claudio's tracking hooks. Claude background agents, Assistant and plan usage remain Claude Code features.") {
+            SettingsRow(title: "Executable", subtitle: "Leave empty to detect Codex on PATH, in ~/.local/bin or Homebrew.") {
+                TextField("Detect automatically", text: optionalText(\.codexPath))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 230)
+            }
+            SettingsRow(title: "Model", subtitle: "Optional model ID; empty uses your Codex configuration.") {
+                TextField("Codex default", text: optionalText(\.defaultCodexModel))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 230)
+            }
+            SettingsRow(title: "Permissions", showsSeparator: false) {
+                Picker("Codex Permissions", selection: settingBinding(model, \.defaultCodexPermissions)) {
+                    ForEach(CodexPermissions.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .frame(width: 260)
+            }
+        }
+
+        SettingsGroup(title: "Claude Code Session Mode") {
             HStack(alignment: .center, spacing: 18) {
                 Text(background.wrappedValue
                      ? "Background agents (claude --bg) keep running when you close their tab or quit Claudio, can each have their own git worktree, and show up in claude agents."
@@ -315,7 +345,7 @@ private struct SessionSettings: View {
             .padding(16)
         }
 
-        SettingsGroup(title: "Defaults", footer: "You can change these for each session in the New Session sheet.") {
+        SettingsGroup(title: "Claude Code Defaults", footer: "You can change these for each session in the New Session sheet.") {
             SettingsRow(title: "Model") {
                 Picker("Model", selection: settingBinding(model, \.defaultModel)) {
                     ForEach(ModelChoices.all, id: \.label) { choice in
@@ -341,6 +371,15 @@ private struct SessionSettings: View {
                 .frame(width: 200)
             }
         }
+    }
+
+    private func optionalText(_ keyPath: WritableKeyPath<AppSettings, String?>) -> Binding<String> {
+        Binding(get: { model.settings[keyPath: keyPath] ?? "" }, set: { value in
+            var settings = model.settings
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            settings[keyPath: keyPath] = trimmed.isEmpty ? nil : trimmed
+            model.updateSettings(settings)
+        })
     }
 }
 

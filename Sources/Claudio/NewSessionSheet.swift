@@ -29,6 +29,9 @@ struct NewSessionSheet: View {
     @State private var permissionEdited = false
     @State private var prompt = ""
     @State private var useWorktree = true
+    @State private var provider: SessionProvider = .claude
+    @State private var codexModel = ""
+    @State private var codexPermissions: CodexPermissions = .configured
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -37,6 +40,13 @@ struct NewSessionSheet: View {
                 .foregroundStyle(DS.text)
 
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 12) {
+                GridRow {
+                    label("CLI")
+                    Picker("CLI", selection: $provider) {
+                        ForEach(SessionProvider.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .labelsHidden()
+                }
                 GridRow {
                     label("Project")
                     Picker("", selection: $projectID) {
@@ -85,12 +95,18 @@ struct NewSessionSheet: View {
                 }
                 GridRow {
                     label("Model")
-                    Picker("", selection: $modelID) {
-                        ForEach(ModelChoices.all, id: \.label) { choice in
-                            Text(choice.label).tag(choice.id)
+                    if provider == .codex {
+                        TextField("Codex default", text: $codexModel)
+                            .textFieldStyle(.roundedBorder)
+                            .help("Optional model ID. Leave empty to use your Codex configuration.")
+                    } else {
+                        Picker("", selection: $modelID) {
+                            ForEach(ModelChoices.all, id: \.label) { choice in
+                                Text(choice.label).tag(choice.id)
+                            }
                         }
+                        .labelsHidden()
                     }
-                    .labelsHidden()
                 }
                 if backgroundMode {
                     GridRow {
@@ -104,10 +120,17 @@ struct NewSessionSheet: View {
                 }
                 GridRow {
                     label("Permissions")
-                    Picker("", selection: Binding(get: { permissionMode }, set: { permissionMode = $0; permissionEdited = true })) {
-                        ForEach(PermissionMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                    if provider == .codex {
+                        Picker("Permissions", selection: $codexPermissions) {
+                            ForEach(CodexPermissions.allCases, id: \.self) { Text($0.label).tag($0) }
+                        }
+                        .labelsHidden()
+                    } else {
+                        Picker("", selection: Binding(get: { permissionMode }, set: { permissionMode = $0; permissionEdited = true })) {
+                            ForEach(PermissionMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                        }
+                        .labelsHidden()
                     }
-                    .labelsHidden()
                 }
             }
 
@@ -119,11 +142,16 @@ struct NewSessionSheet: View {
                     .padding(6)
                     .frame(minHeight: 120)
                     .fieldChrome()
-                Text(backgroundMode
+                Text(provider == .codex
+                     ? "Opens Codex CLI in this project. Sign in in the terminal if prompted. Use /hooks to review and trust Claudio's session tracking hooks."
+                     : backgroundMode
                      ? "Starts a Claude Code background agent and attaches to it. Leave the prompt empty to open a plain terminal session instead."
                      : "Opens Claude Code in a terminal in the project directory. Optional: leave empty to start with a blank prompt.")
                     .font(DS.font(11.5))
                     .foregroundStyle(DS.dim)
+                if provider == .codex, let reason = model.codexUnavailableReason {
+                    Text(reason).font(DS.font(11.5)).foregroundStyle(DS.red)
+                }
             }
 
             HStack {
@@ -133,7 +161,7 @@ struct NewSessionSheet: View {
                 Button("Start Session", action: create)
                     .buttonStyle(PrimaryButtonStyle(horizontalPadding: 14, verticalPadding: 5))
                     .keyboardShortcut(.defaultAction)
-                    .disabled(projectID == nil)
+                    .disabled(!canCreate)
                     .help("Start Session (Return, or ⌘Return from the prompt)")
             }
         }
@@ -142,7 +170,7 @@ struct NewSessionSheet: View {
         .background {
             Button("Start Session", action: create)
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(projectID == nil)
+                .disabled(!canCreate)
                 .opacity(0)
                 .accessibilityHidden(true)
         }
@@ -157,7 +185,11 @@ struct NewSessionSheet: View {
     }
 
     private var backgroundMode: Bool {
-        model.runsInBackground(prompt: prompt)
+        provider == .claude && model.runsInBackground(prompt: prompt)
+    }
+
+    private var canCreate: Bool {
+        projectID != nil && (provider != .codex || model.codexUnavailableReason == nil)
     }
 
     private var isGitProject: Bool {
@@ -176,6 +208,9 @@ struct NewSessionSheet: View {
     }
 
     private func applyDefaults() {
+        provider = model.settings.defaultProvider
+        codexModel = model.settings.defaultCodexModel ?? ""
+        codexPermissions = model.settings.defaultCodexPermissions
         modelID = model.settings.defaultModel
         permissionMode = model.settings.defaultPermissionMode(background: backgroundMode)
         switch initialGroup {
@@ -193,11 +228,13 @@ struct NewSessionSheet: View {
     private func create() {
         guard let projectID else { return }
         var request = NewSessionRequest(projectID: projectID, folderID: folderID, name: name,
-                                        prompt: prompt, model: modelID, permissionMode: permissionMode)
+                                        prompt: prompt, model: provider == .codex ? codexModel.trimmingCharacters(in: .whitespacesAndNewlines) : modelID,
+                                        permissionMode: permissionMode)
+        request.provider = provider
+        request.codexPermissions = codexPermissions
         request.useWorktree = useWorktree
         request.tagIDs = Array(tagIDs)
-        model.createSession(request)
-        dismiss()
+        if model.createSession(request) != nil { dismiss() }
     }
 }
 #endif
